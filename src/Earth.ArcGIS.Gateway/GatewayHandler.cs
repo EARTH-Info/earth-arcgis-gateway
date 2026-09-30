@@ -17,7 +17,7 @@ public static class GatewayHandler
 
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
         ArcGisTokenProvider tokens, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
-        IArcGisResourceResolver resources, ILoggerFactory loggerFactory)
+        IArcGisResourceResolver resources, IAccessPolicyClient accessPolicy, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("ArcGisAudit");
         var cfg = options.Value;
@@ -37,6 +37,22 @@ public static class GatewayHandler
         var operation = resource.Operation;
         if (BlockedOperations.Contains(operation))
         { Audit(logger, subject, normalized, context.Request.Method, 403, 0, cid, "write_denied"); context.Response.StatusCode = 403; return; }
+
+        var tenant = context.User.FindFirstValue("tenant_id") ?? context.User.FindFirstValue("tid");
+        var accessRequest = new AccessPolicyRequest(
+            subject, tenant, application.Id, resource.ServiceName, resource.ServiceType,
+            resource.LayerId, resource.Operation, context.Request.Method, cid);
+
+        var accessDecision = await accessPolicy.AuthorizeAsync(application, accessRequest, context.RequestAborted);
+        if (!accessDecision.Allowed)
+        {
+            logger.LogWarning(
+                "arcgis_access_denied earthid_sub={EarthIdSub} application={Application} service={Service} layer={LayerId} operation={Operation} reason={ReasonCode} policy_version={PolicyVersion} correlation_id={CorrelationId}",
+                subject, application.Id, resource.ServiceName, resource.LayerId, resource.Operation,
+                accessDecision.ReasonCode, accessDecision.PolicyVersion, cid);
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
 
         var baseUri = new Uri(cfg.ArcGisBaseUrl.TrimEnd('/') + "/");
         var target = new Uri(baseUri, normalized.TrimStart('/') + context.Request.QueryString);
