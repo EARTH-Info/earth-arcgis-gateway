@@ -17,7 +17,8 @@ public static class GatewayHandler
 
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
         ArcGisTokenProvider tokens, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
-        IArcGisResourceResolver resources, IAccessPolicyClient accessPolicy, ILoggerFactory loggerFactory)
+        IArcGisResourceResolver resources, IArcGisOperationPolicy operationPolicy,
+        IAccessPolicyClient accessPolicy, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("ArcGisAudit");
         var cfg = options.Value;
@@ -35,8 +36,8 @@ public static class GatewayHandler
         { Audit(logger, subject, normalized, context.Request.Method, 403, 0, cid, "path_denied"); context.Response.StatusCode = 403; return; }
 
         var operation = resource.Operation;
-        if (BlockedOperations.Contains(operation))
-        { Audit(logger, subject, normalized, context.Request.Method, 403, 0, cid, "write_denied"); context.Response.StatusCode = 403; return; }
+        if (!operationPolicy.IsAllowed(resource, context.Request.Method))
+        { Audit(logger, subject, normalized, context.Request.Method, 403, 0, cid, "operation_denied"); context.Response.StatusCode = 403; return; }
 
         var tenant = context.User.FindFirstValue("tenant_id") ?? context.User.FindFirstValue("tid");
         var accessRequest = new AccessPolicyRequest(
