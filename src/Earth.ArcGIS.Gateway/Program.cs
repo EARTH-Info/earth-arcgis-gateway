@@ -22,6 +22,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         o.Authority = authority;
         o.Audience = audience;
         o.RequireHttpsMetadata = true;
+        o.MapInboundClaims = false;
         o.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -31,7 +32,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ClockSkew = TimeSpan.FromMinutes(1)
         };
     });
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("earthid-user", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireClaim("sub");
+    });
+});
 
 builder.Services.AddRateLimiter(o =>
 {
@@ -59,7 +67,7 @@ app.UseRateLimiter();
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapMethods("/arcgis/{**path}", new[] { "GET", "POST" }, GatewayHandler.HandleAsync)
-   .RequireAuthorization()
+   .RequireAuthorization("earthid-user")
    .RequireRateLimiting("earthid-user");
 
 app.Run();
