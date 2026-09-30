@@ -8,6 +8,9 @@ using Microsoft.IdentityModel.Tokens;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<GatewayOptions>(builder.Configuration.GetSection("Gateway"));
+builder.Services.Configure<ApplicationOptions>(builder.Configuration.GetSection("Applications"));
+builder.Services.AddSingleton<IApplicationIdentityResolver, ApplicationIdentityResolver>();
+builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>();
 builder.Services.AddHttpClient<ArcGisTokenProvider>();
 builder.Services.AddHttpClient("arcgis", c => c.Timeout = TimeSpan.FromSeconds(100));
 
