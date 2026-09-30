@@ -18,7 +18,7 @@ public static class GatewayHandler
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
         ArcGisTokenProvider tokens, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
         IArcGisResourceResolver resources, IArcGisOperationPolicy operationPolicy,
-        IAccessPolicyClient accessPolicy, ILoggerFactory loggerFactory)
+        IAccessPolicyClient accessPolicy, ITelemetryQueue telemetry, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("ArcGisAudit");
         var cfg = options.Value;
@@ -51,6 +51,10 @@ public static class GatewayHandler
                 "arcgis_access_denied earthid_sub={EarthIdSub} application={Application} service={Service} layer={LayerId} operation={Operation} reason={ReasonCode} policy_version={PolicyVersion} correlation_id={CorrelationId}",
                 subject, application.Id, resource.ServiceName, resource.LayerId, resource.Operation,
                 accessDecision.ReasonCode, accessDecision.PolicyVersion, cid);
+            telemetry.TryWrite(new TelemetryEvent(DateTimeOffset.UtcNow, subject, tenant, application.Id,
+                resource.ServiceName, resource.ServiceType, resource.LayerId, resource.Operation,
+                context.Request.Method, StatusCodes.Status403Forbidden, 0, "DENY",
+                accessDecision.ReasonCode, accessDecision.PolicyVersion, cid));
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
         }
@@ -87,6 +91,10 @@ public static class GatewayHandler
         await context.Response.Body.WriteAsync(result.Body, context.RequestAborted);
         sw.Stop();
         Audit(logger, subject, normalized, context.Request.Method, result.Status, sw.ElapsedMilliseconds, cid, $"allow:{application.Id}:{resource.ServiceName}:{resource.LayerId}:{resource.Operation}");
+        telemetry.TryWrite(new TelemetryEvent(DateTimeOffset.UtcNow, subject, tenant, application.Id,
+            resource.ServiceName, resource.ServiceType, resource.LayerId, resource.Operation,
+            context.Request.Method, result.Status, sw.ElapsedMilliseconds, "ALLOW",
+            accessDecision.ReasonCode, accessDecision.PolicyVersion, cid));
     }
 
     private static async Task<UpstreamResult> SendAsync(HttpClient client, Uri target, HttpContext context,
