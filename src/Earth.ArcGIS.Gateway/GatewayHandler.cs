@@ -16,18 +16,25 @@ public static class GatewayHandler
     };
 
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
-        ArcGisTokenProvider tokens, IOptions<GatewayOptions> options, ILoggerFactory loggerFactory)
+        ArcGisTokenProvider tokens, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
+        IArcGisResourceResolver resources, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("ArcGisAudit");
         var cfg = options.Value;
         var subject = context.User.FindFirstValue("sub") ?? "unknown";
         var cid = context.TraceIdentifier;
-        var normalized = "/" + (path ?? "").TrimStart('/');
+        if (!applications.TryResolve(context.User, out var application))
+        { Audit(logger, subject, "unknown", context.Request.Method, 403, 0, cid, "application_denied"); context.Response.StatusCode = 403; return; }
+
+        if (!resources.TryResolve(path, out var resource))
+        { Audit(logger, subject, path ?? "", context.Request.Method, 403, 0, cid, "resource_invalid"); context.Response.StatusCode = 403; return; }
+
+        var normalized = resource.CanonicalPath;
 
         if (!cfg.AllowedPathPrefixes.Any(p => normalized.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
         { Audit(logger, subject, normalized, context.Request.Method, 403, 0, cid, "path_denied"); context.Response.StatusCode = 403; return; }
 
-        var operation = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+        var operation = resource.Operation;
         if (BlockedOperations.Contains(operation))
         { Audit(logger, subject, normalized, context.Request.Method, 403, 0, cid, "write_denied"); context.Response.StatusCode = 403; return; }
 
@@ -62,7 +69,7 @@ public static class GatewayHandler
         if (result.ContentType is not null) context.Response.ContentType = result.ContentType;
         await context.Response.Body.WriteAsync(result.Body, context.RequestAborted);
         sw.Stop();
-        Audit(logger, subject, normalized, context.Request.Method, result.Status, sw.ElapsedMilliseconds, cid, "allow");
+        Audit(logger, subject, normalized, context.Request.Method, result.Status, sw.ElapsedMilliseconds, cid, $"allow:{application.Id}:{resource.ServiceName}:{resource.LayerId}:{resource.Operation}");
     }
 
     private static async Task<UpstreamResult> SendAsync(HttpClient client, Uri target, HttpContext context,
