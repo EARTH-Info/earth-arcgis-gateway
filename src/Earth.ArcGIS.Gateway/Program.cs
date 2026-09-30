@@ -14,6 +14,9 @@ builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>()
 builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
 builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2));
 builder.Services.AddSingleton<IAccessPolicyClient, AccessPolicyClient>();
+builder.Services.AddSingleton<ITelemetryQueue, TelemetryQueue>();
+builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
+builder.Services.AddHostedService<TelemetryWorker>();
 builder.Services.AddHttpClient<ArcGisTokenProvider>();
 builder.Services.AddHttpClient("arcgis", c => c.Timeout = TimeSpan.FromSeconds(100));
 
