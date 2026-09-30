@@ -11,6 +11,7 @@ builder.Services.Configure<GatewayOptions>(builder.Configuration.GetSection("Gat
 builder.Services.Configure<ApplicationOptions>(builder.Configuration.GetSection("Applications"));
 builder.Services.AddSingleton<IApplicationIdentityResolver, ApplicationIdentityResolver>();
 builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>();
+builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
 builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2));
 builder.Services.AddSingleton<IAccessPolicyClient, AccessPolicyClient>();
 builder.Services.AddHttpClient<ArcGisTokenProvider>();
