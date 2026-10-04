@@ -54,9 +54,49 @@ public sealed class AccessPolicyClientTests
         Assert.Equal("access_api_not_configured", result.ReasonCode);
     }
 
-    private static AccessPolicyClient Create(HttpStatusCode status, string body)
+    [Fact]
+    public async Task HttpAuthorizeEndpoint_FailsClosedWithoutRequest()
     {
-        var http = new HttpClient(new StubHandler(status, body)) { BaseAddress = new Uri("https://policy.test/authorize") };
+        var handler = new StubHandler(HttpStatusCode.OK, """{"decision":"ALLOW"}""");
+        var client = Create(handler);
+        var result = await client.AuthorizeAsync(
+            new GatewayApplication("jtuwma", "http://policy.test/authorize"),
+            Request(),
+            CancellationToken.None);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("access_api_invalid_configuration", result.ReasonCode);
+        Assert.Null(handler.LastRequestUri);
+    }
+
+    [Fact]
+    public async Task ConfiguredAuthorizeEndpoint_IsUsedExactly()
+    {
+        var handler = new StubHandler(HttpStatusCode.OK, """{"decision":"ALLOW"}""");
+        var client = Create(handler);
+        var result = await client.AuthorizeAsync(App(), Request(), CancellationToken.None);
+
+        Assert.True(result.Allowed);
+        Assert.Equal(new Uri("https://policy.test/authorize"), handler.LastRequestUri);
+    }
+
+    [Fact]
+    public async Task OversizedPolicyResponse_FailsClosed()
+    {
+        var body = new string('x', 70 * 1024);
+        var result = await Create(HttpStatusCode.OK, body)
+            .AuthorizeAsync(App(), Request(), CancellationToken.None);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("access_api_response_too_large", result.ReasonCode);
+    }
+
+    private static AccessPolicyClient Create(HttpStatusCode status, string body) =>
+        Create(new StubHandler(status, body));
+
+    private static AccessPolicyClient Create(StubHandler handler)
+    {
+        var http = new HttpClient(handler) { BaseAddress = new Uri("https://policy.test/authorize") };
         return new AccessPolicyClient(new StubFactory(http), NullLogger<AccessPolicyClient>.Instance);
     }
 
@@ -71,10 +111,15 @@ public sealed class AccessPolicyClientTests
 
     private sealed class StubHandler(HttpStatusCode status, string body) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(status)
+        public Uri? LastRequestUri { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastRequestUri = request.RequestUri;
+            return Task.FromResult(new HttpResponseMessage(status)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
             });
+        }
     }
 }
