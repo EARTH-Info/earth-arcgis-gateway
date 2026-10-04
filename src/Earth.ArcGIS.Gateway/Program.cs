@@ -84,6 +84,12 @@ builder.Services.AddSingleton(rateLimitOptions);
 var redisConnection = builder.Configuration["Redis:ConnectionString"];
 if (string.IsNullOrWhiteSpace(redisConnection))
 {
+    if (builder.Environment.IsProduction())
+    {
+        throw new InvalidOperationException(
+            "Redis:ConnectionString is required in Production so rate limits and user blocks remain distributed.");
+    }
+
     builder.Services.AddSingleton<IGatewayRateLimiter, InMemoryGatewayRateLimiter>();
     builder.Services.AddSingleton<IUserBlockStore, UserBlockStore>();
 }
@@ -275,7 +281,6 @@ app.MapGet("/health/ready", (
                 replayedBatches = persistence.ReplayedBatches,
                 droppedSpoolBatches = persistence.DroppedSpoolBatches,
                 storageFailures = persistence.StorageFailures,
-                pendingSpoolFiles = spool.CountPendingFiles(),
                 lastSuccess = persistence.LastSuccess,
                 lastFailure = persistence.LastFailure
             }
