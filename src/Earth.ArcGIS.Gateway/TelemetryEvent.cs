@@ -15,4 +15,6 @@ public sealed record TelemetryEvent(
     string Decision,
     string ReasonCode,
     string? PolicyVersion,
-    string CorrelationId);
+    string CorrelationId,
+    long? ResponseBytes = null,
+    int? RateLimitRemaining = null);
