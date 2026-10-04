@@ -141,5 +141,5 @@ public sealed class AccessPolicyClient(
     private static AccessPolicyDecision Deny(string reason, string? version = null) =>
         new(false, reason, version);
 
-    private sealed class AccessPolicyResponseTooLargeException : Exception;
+    private sealed class AccessPolicyResponseTooLargeException : Exception { }
 }
