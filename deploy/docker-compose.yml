@@ -20,6 +20,7 @@ services:
       Gateway__OAuthTokenEndpoint: ${ARCGIS_OAUTH_TOKEN_ENDPOINT}
       Gateway__OAuthClientId: ${ARCGIS_OAUTH_CLIENT_ID}
       Gateway__OAuthClientSecret: ${ARCGIS_OAUTH_CLIENT_SECRET}
+      Gateway__OAuthExchangeForFederatedServer: ${ARCGIS_OAUTH_EXCHANGE_FOR_FEDERATED_SERVER:-true}
       Gateway__AllowedPathPrefixes__0: ${ARCGIS_ALLOWED_PATH_PREFIX}
       Applications__Registrations__jtuwma__Audiences__0: ${JTUWMA_AUDIENCE}
       Applications__Registrations__jtuwma__ClientIds__0: ${JTUWMA_CLIENT_ID}
