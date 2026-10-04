@@ -17,15 +17,17 @@ public static class AdminConsole
 
         group.MapGet("", () => Results.Content(Html, "text/html; charset=utf-8"));
 
-        group.MapGet("/api/overview", (
+        group.MapGet("/api/overview", async (
             ITelemetryQueue telemetry,
             TelemetryPersistenceHealth persistence,
             FileTelemetrySpool spool,
             IUserBlockStore blocks,
             IArcGisUpstreamGate upstreamGate,
-            IConnectionMultiplexerAccessor redisAccessor) =>
+            IConnectionMultiplexerAccessor redisAccessor,
+            HttpContext context) =>
         {
             var recent = telemetry.GetRecent(500);
+            var activeBlocks = await blocks.GetActiveAsync(context.RequestAborted);
             var now = DateTimeOffset.UtcNow;
             var today = recent.Count(x => x.Timestamp.UtcDateTime.Date == now.UtcDateTime.Date);
 
@@ -40,7 +42,7 @@ public static class AdminConsole
                 telemetryDropped = telemetry.Dropped,
                 pendingSpoolFiles = spool.CountPendingFiles(),
                 storageFailures = persistence.StorageFailures,
-                activeBlocks = blocks.GetActive().Count,
+                activeBlocks = activeBlocks.Count,
                 upstreamConcurrency = new
                 {
                     limit = upstreamGate.Limit,
@@ -140,16 +142,17 @@ public static class AdminConsole
             });
         });
 
-        group.MapGet("/api/blocks", (
-            IUserBlockStore blocks) =>
-            Results.Ok(blocks.GetActive()));
+        group.MapGet("/api/blocks", async (
+            IUserBlockStore blocks,
+            HttpContext context) =>
+            Results.Ok(await blocks.GetActiveAsync(context.RequestAborted)));
 
         group.MapGet("/api/admin-audit", (
             AdminAuditStore audit,
             int? limit) =>
             Results.Ok(audit.GetRecent(Math.Clamp(limit ?? 100, 1, 500))));
 
-        group.MapPost("/api/blocks", (
+        group.MapPost("/api/blocks", async (
             AdminBlockRequest request,
             HttpContext context,
             IUserBlockStore blocks,
@@ -178,11 +181,12 @@ public static class AdminConsole
                 ? null
                 : TimeSpan.FromMinutes(request.Minutes.Value);
 
-            var block = blocks.Block(
+            var block = await blocks.BlockAsync(
                 request.EarthIdSub,
                 request.Reason,
                 adminSubject,
-                duration);
+                duration,
+                context.RequestAborted);
 
             audit.Add(new AdminEnforcementEvent(
                 DateTimeOffset.UtcNow,
@@ -205,7 +209,7 @@ public static class AdminConsole
             return Results.Ok(block);
         });
 
-        group.MapDelete("/api/blocks/{earthIdSub}", (
+        group.MapDelete("/api/blocks/{earthIdSub}", async (
             string earthIdSub,
             HttpContext context,
             IUserBlockStore blocks,
@@ -213,7 +217,9 @@ public static class AdminConsole
             ILoggerFactory loggerFactory) =>
         {
             var adminSubject = context.User.FindFirstValue("sub") ?? "unknown";
-            var removed = blocks.Unblock(earthIdSub);
+            var removed = await blocks.UnblockAsync(
+                earthIdSub,
+                context.RequestAborted);
 
             audit.Add(new AdminEnforcementEvent(
                 DateTimeOffset.UtcNow,
