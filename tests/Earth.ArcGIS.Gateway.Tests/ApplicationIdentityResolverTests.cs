@@ -54,6 +54,29 @@ public sealed class ApplicationIdentityResolverTests
     }
 
     [Fact]
+    public void RejectsRegistrationWithNoTrustedClientIdsEvenIfValidatorIsBypassed()
+    {
+        var resolver = new ApplicationIdentityResolver(
+            Options.Create(new ApplicationOptions
+            {
+                Registrations = new Dictionary<string, ApplicationRegistration>
+                {
+                    ["unsafe"] = new()
+                    {
+                        Audiences = ["gateway-api"],
+                        ClientIds = []
+                    }
+                }
+            }));
+
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("aud", "gateway-api")],
+            "test"));
+
+        Assert.False(resolver.TryResolve(principal, out _));
+    }
+
+    [Fact]
     public void Rejects_UnknownClient()
     {
         var p = new ClaimsPrincipal(new ClaimsIdentity(
