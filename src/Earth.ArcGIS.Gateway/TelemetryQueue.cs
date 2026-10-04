@@ -49,6 +49,15 @@ public sealed class TelemetryQueue : ITelemetryQueue
     public ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken) =>
         _channel.Reader.WaitToReadAsync(cancellationToken);
 
-    public bool TryRead(out TelemetryEvent? item) =>
-        _channel.Reader.TryRead(out item);
+    public bool TryRead(out TelemetryEvent? item)
+    {
+        if (_channel.Reader.TryRead(out var value))
+        {
+            item = value;
+            return true;
+        }
+
+        item = null;
+        return false;
+    }
 }
