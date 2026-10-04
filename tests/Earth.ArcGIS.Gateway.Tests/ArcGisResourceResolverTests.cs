@@ -50,7 +50,7 @@ public sealed class ArcGisResourceResolverTests
 
         Assert.Equal("Land/My Parcels", resource.ServiceName);
         Assert.Equal(
-            "/arcgis/rest/services/Land/My Parcels/FeatureServer/0/query",
+            "/arcgis/rest/services/Land/My%20Parcels/FeatureServer/0/query",
             resource.CanonicalPath);
     }
 
