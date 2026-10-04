@@ -56,11 +56,11 @@ public sealed class AccessPolicyClientTests
 
     private static AccessPolicyClient Create(HttpStatusCode status, string body)
     {
-        var http = new HttpClient(new StubHandler(status, body)) { BaseAddress = new Uri("https://policy.test/") };
+        var http = new HttpClient(new StubHandler(status, body)) { BaseAddress = new Uri("https://policy.test/authorize") };
         return new AccessPolicyClient(new StubFactory(http), NullLogger<AccessPolicyClient>.Instance);
     }
 
-    private static GatewayApplication App() => new("jtuwma", "https://policy.test/");
+    private static GatewayApplication App() => new("jtuwma", "https://policy.test/authorize");
     private static AccessPolicyRequest Request() => new("sub-1", "tenant-1", "jtuwma",
         "Land/Parcels", "FeatureServer", 0, "query", "GET", "cid-1");
 
