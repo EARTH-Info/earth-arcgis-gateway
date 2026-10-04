@@ -34,6 +34,8 @@ services:
       Telemetry__Table: ${CLICKHOUSE_TABLE:-gateway_telemetry}
       Telemetry__Username: ${CLICKHOUSE_USERNAME:-}
       Telemetry__Password: ${CLICKHOUSE_PASSWORD:-}
+      Admin__OidcClientId: ${GATEWAY_ADMIN_OIDC_CLIENT_ID:?GATEWAY_ADMIN_OIDC_CLIENT_ID is required}
+      Admin__OidcClientSecret: ${GATEWAY_ADMIN_OIDC_CLIENT_SECRET:?GATEWAY_ADMIN_OIDC_CLIENT_SECRET is required}
       Admin__AllowedSubjects__0: ${GATEWAY_ADMIN_SUBJECT}
       Protection__TrustedProxies__0: ${TRUSTED_PROXY_IP:-}
     volumes:
