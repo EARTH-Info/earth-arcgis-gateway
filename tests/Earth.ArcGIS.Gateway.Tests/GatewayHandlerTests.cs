@@ -103,6 +103,32 @@ public sealed class GatewayHandlerTests
     }
 
     [Fact]
+    public async Task NonObjectJsonResponseIsForwardedWithoutAuthRetry()
+    {
+        var upstream = new RecordingHandler(
+            Json("""[{"value":1}]"""));
+        var credentials = new FakeCredentialProvider("token-1");
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Single(upstream.Requests);
+        Assert.Equal(1, credentials.GetCalls);
+        Assert.Equal(0, credentials.InvalidateCalls);
+
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body);
+        Assert.Equal(
+            """[{"value":1}]""",
+            await reader.ReadToEndAsync(
+                TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task ActiveUserBlockRejectsBeforeAllGatewayDependencies()
     {
         var upstream = new RecordingHandler();
@@ -145,6 +171,11 @@ public sealed class GatewayHandlerTests
         response.Headers.TryAddWithoutValidation(
             "Set-Cookie",
             "session=upstream-secret");
+        response.Content.Headers.ContentRange =
+            new System.Net.Http.Headers.ContentRangeHeaderValue(
+                0,
+                9,
+                100);
 
         var upstream = new RecordingHandler(response);
         var credentials = new FakeCredentialProvider("arcgis-secret-token");
@@ -156,6 +187,9 @@ public sealed class GatewayHandlerTests
         await HandleAsync(context, upstream, credentials, access, rate);
 
         Assert.Equal("\"v1\"", context.Response.Headers.ETag.ToString());
+        Assert.Equal(
+            "bytes 0-9/100",
+            context.Response.Headers.ContentRange.ToString());
         Assert.False(context.Response.Headers.ContainsKey("Set-Cookie"));
         Assert.DoesNotContain(
             "arcgis-secret-token",
