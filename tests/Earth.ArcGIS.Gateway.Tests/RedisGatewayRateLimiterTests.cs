@@ -46,11 +46,11 @@ public sealed class RedisGatewayRateLimiterTests
 
         Assert.True((await limiter.ConsumeAsync(key, 1, CancellationToken.None)).Allowed);
 
-        await Task.Delay(TimeSpan.FromMilliseconds(1500));
+        await Task.Delay(TimeSpan.FromMilliseconds(1500), TestContext.Current.CancellationToken);
 
         Assert.True((await limiter.ConsumeAsync(key, 1, CancellationToken.None)).Allowed);
 
-        await Task.Delay(TimeSpan.FromMilliseconds(1700));
+        await Task.Delay(TimeSpan.FromMilliseconds(1700), TestContext.Current.CancellationToken);
 
         var afterOriginalWindow = await limiter.ConsumeAsync(key, 1, CancellationToken.None);
         Assert.True(afterOriginalWindow.Allowed);
@@ -77,7 +77,7 @@ public sealed class RedisGatewayRateLimiterTests
 
         Assert.True((await limiter.ConsumeAsync(key, 3, CancellationToken.None)).Allowed);
 
-        await Task.Delay(TimeSpan.FromMilliseconds(1100));
+        await Task.Delay(TimeSpan.FromMilliseconds(1100), TestContext.Current.CancellationToken);
 
         var denied = await limiter.ConsumeAsync(key, 1, CancellationToken.None);
         Assert.False(denied.Allowed);
