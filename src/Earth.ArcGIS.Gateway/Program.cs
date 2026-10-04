@@ -63,7 +63,29 @@ builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSe
     });
 builder.Services.AddSingleton<IAccessPolicyClient, AccessPolicyClient>();
 builder.Services.AddSingleton<ITelemetryQueue, TelemetryQueue>();
-builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
+builder.Services.Configure<TelemetryPersistenceOptions>(
+    builder.Configuration.GetSection("Telemetry"));
+builder.Services.AddSingleton<TelemetryPersistenceHealth>();
+builder.Services.AddSingleton<FileTelemetrySpool>();
+
+var clickHouseBaseUrl = builder.Configuration["Telemetry:ClickHouseBaseUrl"];
+if (string.IsNullOrWhiteSpace(clickHouseBaseUrl))
+{
+    builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
+}
+else
+{
+    builder.Services.AddHttpClient("clickhouse", client =>
+        client.Timeout = TimeSpan.FromSeconds(5))
+        .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            ConnectTimeout = TimeSpan.FromSeconds(2),
+            MaxResponseHeadersLength = 32
+        });
+    builder.Services.AddSingleton<ClickHouseTelemetrySink>();
+    builder.Services.AddSingleton<ITelemetrySink, ResilientTelemetrySink>();
+}
 builder.Services.AddHostedService<TelemetryWorker>();
 builder.Services.AddHttpClient("arcgis-token", c => c.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
@@ -154,11 +176,47 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
 
-app.MapGet("/health", (ITelemetryQueue telemetry) => Results.Ok(new
+app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
+
+app.MapGet("/health/ready", (
+    ITelemetryQueue telemetry,
+    TelemetryPersistenceHealth persistence,
+    FileTelemetrySpool spool,
+    IServiceProvider services) =>
 {
-    status = "ok",
-    telemetry = new { accepted = telemetry.Accepted, dropped = telemetry.Dropped }
-}));
+    var redis = services.GetService<IConnectionMultiplexer>();
+    var redisReady = redis is null || redis.IsConnected;
+    var status = redisReady ? "ready" : "degraded";
+
+    return Results.Json(
+        new
+        {
+            status,
+            redis = new
+            {
+                configured = redis is not null,
+                connected = redis?.IsConnected
+            },
+            telemetry = new
+            {
+                accepted = telemetry.Accepted,
+                dropped = telemetry.Dropped,
+                persistedBatches = persistence.PersistedBatches,
+                spooledBatches = persistence.SpooledBatches,
+                replayedBatches = persistence.ReplayedBatches,
+                droppedSpoolBatches = persistence.DroppedSpoolBatches,
+                storageFailures = persistence.StorageFailures,
+                pendingSpoolFiles = spool.CountPendingFiles(),
+                lastSuccess = persistence.LastSuccess,
+                lastFailure = persistence.LastFailure
+            }
+        },
+        statusCode: redisReady
+            ? StatusCodes.Status200OK
+            : StatusCodes.Status503ServiceUnavailable);
+});
+
+app.MapGet("/health", () => Results.Redirect("/health/ready"));
 
 app.MapMethods("/arcgis/{**path}", new[] { "GET", "POST" }, GatewayHandler.HandleAsync)
    .RequireAuthorization("earthid-user")
