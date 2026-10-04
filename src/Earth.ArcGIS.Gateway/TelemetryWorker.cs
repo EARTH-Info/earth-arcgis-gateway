@@ -30,28 +30,51 @@ public sealed class TelemetryWorker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var batch = new List<TelemetryEvent>(BatchSize);
+        var nextFlush = DateTimeOffset.UtcNow + FlushInterval;
 
         try
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                var waitToRead = queue.WaitToReadAsync(stoppingToken).AsTask();
-                var flushDelay = Task.Delay(FlushInterval, stoppingToken);
-                var completed = await Task.WhenAny(waitToRead, flushDelay);
-
-                if (completed == waitToRead && await waitToRead)
+                if (batch.Count >= BatchSize)
                 {
-                    while (batch.Count < BatchSize && queue.TryRead(out var item))
+                    await FlushAsync(batch, stoppingToken);
+                    nextFlush = DateTimeOffset.UtcNow + FlushInterval;
+                    continue;
+                }
+
+                var remaining = nextFlush - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    if (batch.Count > 0)
+                        await FlushAsync(batch, stoppingToken);
+
+                    nextFlush = DateTimeOffset.UtcNow + FlushInterval;
+                    continue;
+                }
+
+                using var waitCts =
+                    CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                waitCts.CancelAfter(remaining);
+
+                try
+                {
+                    if (!await queue.WaitToReadAsync(waitCts.Token))
+                        break;
+
+                    while (batch.Count < BatchSize &&
+                           queue.TryRead(out var item))
                     {
                         if (item is not null)
                             batch.Add(item);
                     }
                 }
-
-                if (batch.Count >= BatchSize ||
-                    (completed == flushDelay && batch.Count > 0))
+                catch (OperationCanceledException)
+                    when (!stoppingToken.IsCancellationRequested &&
+                          waitCts.IsCancellationRequested)
                 {
-                    await FlushAsync(batch, stoppingToken);
+                    // Flush deadline reached. The next loop iteration performs
+                    // the flush without leaving an orphaned channel waiter.
                 }
             }
         }
