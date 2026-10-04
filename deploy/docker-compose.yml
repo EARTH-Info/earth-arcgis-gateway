@@ -34,6 +34,7 @@ services:
       Telemetry__Username: ${CLICKHOUSE_USERNAME:-}
       Telemetry__Password: ${CLICKHOUSE_PASSWORD:-}
       Admin__AllowedSubjects__0: ${GATEWAY_ADMIN_SUBJECT}
+      Protection__TrustedProxies__0: ${TRUSTED_PROXY_IP:-}
     volumes:
       - gateway-spool:/app/data/telemetry-spool
     ports:
