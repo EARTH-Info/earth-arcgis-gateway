@@ -79,6 +79,13 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
         int? layerId = null;
         var cursor = typeIndex + 1;
 
+        if (cursor < segments.Length &&
+            int.TryParse(segments[cursor], out var numericLayerId) &&
+            numericLayerId < 0)
+        {
+            return false;
+        }
+
         if (serviceType.Equals("SceneServer", StringComparison.OrdinalIgnoreCase) &&
             cursor < segments.Length &&
             segments[cursor].Equals("layers", StringComparison.OrdinalIgnoreCase))
