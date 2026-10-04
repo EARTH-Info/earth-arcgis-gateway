@@ -11,7 +11,7 @@ Reverse proxy / WAF / load balancer (TLS)
         |
 EI ArcGIS Gateway node(s)
         |---- Redis (required for multi-node enforcement)
-        |---- ClickHouse (recommended for production audit analytics)
+        |---- ClickHouse (required by the supplied Production configuration for durable audit analytics)
         |
 EarthID / application Access API / ArcGIS Enterprise
 ```
@@ -52,7 +52,7 @@ For validated Enterprise 11.5 OAuth use:
 
 ## 4. Create telemetry table
 
-When ClickHouse is enabled, execute:
+Create the required ClickHouse telemetry table before starting Production:
 
 ```bash
 clickhouse-client --multiquery < clickhouse-schema.sql
@@ -67,7 +67,7 @@ docker compose --env-file .env build --pull
 docker compose --env-file .env up -d
 ```
 
-The application performs startup validation. Invalid HTTPS endpoints, missing application registrations, empty resource allowlists, or missing credentials for the selected ArcGIS provider cause startup failure instead of silently weakening security.
+The application performs startup validation. Invalid HTTPS endpoints, missing application registrations, empty resource allowlists, missing Redis/ClickHouse in Production, invalid protection limits/trusted proxies, or missing credentials for the selected ArcGIS provider cause startup failure instead of silently weakening security.
 
 ## 6. Verify health
 
