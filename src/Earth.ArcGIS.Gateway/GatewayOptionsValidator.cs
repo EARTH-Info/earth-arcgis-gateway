@@ -8,8 +8,8 @@ public sealed class GatewayOptionsValidator : IValidateOptions<GatewayOptions>
     {
         var errors = new List<string>();
 
-        if (!IsHttpsAbsolute(options.ArcGisBaseUrl))
-            errors.Add("Gateway:ArcGisBaseUrl must be an absolute HTTPS URL.");
+        if (!IsHttpsOrigin(options.ArcGisBaseUrl))
+            errors.Add("Gateway:ArcGisBaseUrl must be an HTTPS origin with no path, query, fragment, or user-info.");
 
         if (options.AllowedPathPrefixes.Length == 0 ||
             options.AllowedPathPrefixes.Any(p =>
@@ -66,7 +66,17 @@ public sealed class GatewayOptionsValidator : IValidateOptions<GatewayOptions>
 
     private static bool IsHttpsAbsolute(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-        uri.Scheme == Uri.UriSchemeHttps;
+        uri.Scheme == Uri.UriSchemeHttps &&
+        string.IsNullOrEmpty(uri.UserInfo) &&
+        string.IsNullOrEmpty(uri.Fragment);
+
+    private static bool IsHttpsOrigin(string value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps &&
+        string.IsNullOrEmpty(uri.UserInfo) &&
+        string.IsNullOrEmpty(uri.Query) &&
+        string.IsNullOrEmpty(uri.Fragment) &&
+        uri.AbsolutePath == "/";
 }
 
 public sealed class ApplicationOptionsValidator : IValidateOptions<ApplicationOptions>
@@ -97,7 +107,9 @@ public sealed class ApplicationOptionsValidator : IValidateOptions<ApplicationOp
 
             if (string.IsNullOrWhiteSpace(registration.AccessApiAuthorizeUrl) ||
                 !Uri.TryCreate(registration.AccessApiAuthorizeUrl, UriKind.Absolute, out var uri) ||
-                uri.Scheme != Uri.UriSchemeHttps)
+                uri.Scheme != Uri.UriSchemeHttps ||
+                !string.IsNullOrEmpty(uri.UserInfo) ||
+                !string.IsNullOrEmpty(uri.Fragment))
             {
                 errors.Add($"Applications:{id}:AccessApiAuthorizeUrl must be an absolute HTTPS URL.");
             }
