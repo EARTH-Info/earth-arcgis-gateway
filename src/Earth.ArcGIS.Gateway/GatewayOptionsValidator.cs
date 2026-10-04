@@ -44,6 +44,14 @@ public sealed class GatewayOptionsValidator : IValidateOptions<GatewayOptions>
                     errors.Add("Gateway:OAuthClientId is required for oauth-11.5.");
                 if (string.IsNullOrWhiteSpace(options.OAuthClientSecret))
                     errors.Add("Gateway:OAuthClientSecret is required for oauth-11.5.");
+
+                if (options.OAuthExchangeForFederatedServer)
+                {
+                    if (!IsHttpsAbsolute(options.PortalTokenEndpoint))
+                        errors.Add("Gateway:PortalTokenEndpoint is required when OAuth federated exchange is enabled.");
+                    if (!IsHttpsAbsolute(options.FederatedServerUrl))
+                        errors.Add("Gateway:FederatedServerUrl is required when OAuth federated exchange is enabled.");
+                }
                 break;
 
             default:
