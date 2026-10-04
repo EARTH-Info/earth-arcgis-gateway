@@ -100,7 +100,7 @@ public sealed class RateCostPolicy : IRateCostPolicy
 
         var value = Encoding.UTF8.GetString(postBody);
         return QueryHelpers.ParseQuery(
-            value.StartsWith('?', StringComparison.Ordinal)
+            value.StartsWith("?", StringComparison.Ordinal)
                 ? value
                 : "?" + value);
     }
