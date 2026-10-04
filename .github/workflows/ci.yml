@@ -46,5 +46,8 @@ jobs:
       - name: Test
         run: dotnet test tests/Earth.ArcGIS.Gateway.Tests/Earth.ArcGIS.Gateway.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=test-results.trx"
 
+      - name: Build production container
+        run: docker build --pull -t earth-arcgis-gateway:ci .
+
       - name: Dependency vulnerability audit
         run: dotnet list src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj package --vulnerable --include-transitive
