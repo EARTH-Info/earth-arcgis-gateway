@@ -85,7 +85,8 @@ public static class GatewayHandler
             context.Response.Headers.RetryAfter = Math.Max(1, rateDecision.RetryAfterSeconds).ToString();
             RecordTelemetry(telemetry, subject, tenant, application.Id, resource,
                 context.Request.Method, StatusCodes.Status429TooManyRequests, 0,
-                "THROTTLE", rateDecision.ReasonCode, null, cid);
+                "THROTTLE", rateDecision.ReasonCode, null, cid,
+                rateLimitRemaining: rateDecision.RemainingUnits);
             Audit(logger, subject, normalized, context.Request.Method,
                 StatusCodes.Status429TooManyRequests, 0, cid, rateDecision.ReasonCode);
             return;
@@ -164,7 +165,9 @@ public static class GatewayHandler
                 $"allow:{application.Id}:{resource.ServiceName}:{resource.LayerId}:{resource.Operation}");
             RecordTelemetry(telemetry, subject, tenant, application.Id, resource,
                 context.Request.Method, result.Status, sw.ElapsedMilliseconds, "ALLOW",
-                accessDecision.ReasonCode, accessDecision.PolicyVersion, cid);
+                accessDecision.ReasonCode, accessDecision.PolicyVersion, cid,
+                responseBytes: result.ContentLength,
+                rateLimitRemaining: rateDecision.RemainingUnits);
         }
         catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
         {
@@ -388,7 +391,9 @@ public static class GatewayHandler
         string decision,
         string reason,
         string? policyVersion,
-        string cid)
+        string cid,
+        long? responseBytes = null,
+        int? rateLimitRemaining = null)
     {
         telemetry.TryWrite(new TelemetryEvent(
             DateTimeOffset.UtcNow,
@@ -405,7 +410,9 @@ public static class GatewayHandler
             decision,
             reason,
             policyVersion,
-            cid));
+            cid,
+            responseBytes,
+            rateLimitRemaining));
     }
 
     private static void Audit(
@@ -435,6 +442,7 @@ public static class GatewayHandler
 
         public int Status => (int)_response.StatusCode;
         public string? ContentType => _response.Content.Headers.ContentType?.ToString();
+        public long? ContentLength => _response.Content.Headers.ContentLength;
         public Stream Stream { get; }
         public byte[] Prefix { get; }
         public bool EndOfStream { get; }
