@@ -135,6 +135,56 @@ public sealed class GatewayHandlerTests
     }
 
 
+
+    [Fact]
+    public async Task SafeCacheHeadersAreForwardedButCookiesAreNot()
+    {
+        var response = Json("""{"features":[]}""");
+        response.Headers.ETag =
+            new System.Net.Http.Headers.EntityTagHeaderValue(""v1"");
+        response.Headers.TryAddWithoutValidation(
+            "Set-Cookie",
+            "session=upstream-secret");
+
+        var upstream = new RecordingHandler(response);
+        var credentials = new FakeCredentialProvider("arcgis-secret-token");
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(""v1"", context.Response.Headers.ETag.ToString());
+        Assert.False(context.Response.Headers.ContainsKey("Set-Cookie"));
+        Assert.DoesNotContain(
+            "arcgis-secret-token",
+            context.Response.Headers.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CredentialProviderFailureReturnsControlled502()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider
+        {
+            Failure = new InvalidOperationException(
+                "Malformed ArcGIS token response.")
+        };
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(
+            StatusCodes.Status502BadGateway,
+            context.Response.StatusCode);
+        Assert.Empty(upstream.Requests);
+    }
+
     [Fact]
     public async Task RateBackendFailureReturns503WithoutAccessOrArcGis()
     {
@@ -357,10 +407,15 @@ public sealed class GatewayHandlerTests
 
         public int GetCalls { get; private set; }
         public int InvalidateCalls { get; private set; }
+        public Exception? Failure { get; init; }
 
         public Task<string> GetTokenAsync(CancellationToken cancellationToken)
         {
             GetCalls++;
+
+            if (Failure is not null)
+                throw Failure;
+
             var value = tokens.Length == 0
                 ? "token"
                 : tokens[Math.Min(tokenIndex++, tokens.Length - 1)];
