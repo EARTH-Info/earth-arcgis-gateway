@@ -111,7 +111,12 @@ public sealed class GatewayHandlerTests
             new AccessPolicyDecision(true, "allow", "v1"));
         var rate = new FakeRateLimiter();
         var blocks = new UserBlockStore();
-        blocks.Block("sub-1", "abuse", "admin-sub", TimeSpan.FromMinutes(10));
+        await blocks.BlockAsync(
+            "sub-1",
+            "abuse",
+            "admin-sub",
+            TimeSpan.FromMinutes(10),
+            TestContext.Current.CancellationToken);
         var context = CreateContext("GET");
 
         await HandleAsync(
