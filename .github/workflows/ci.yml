@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - feat/modern-dotnet-earthid-gateway
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore gateway
+        run: dotnet restore src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj
+
+      - name: Restore tests
+        run: dotnet restore tests/Earth.ArcGIS.Gateway.Tests/Earth.ArcGIS.Gateway.Tests.csproj
+
+      - name: Build gateway
+        run: dotnet build src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/Earth.ArcGIS.Gateway.Tests/Earth.ArcGIS.Gateway.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=test-results.trx"
+
+      - name: Dependency vulnerability audit
+        run: dotnet list src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj package --vulnerable --include-transitive
