@@ -141,7 +141,7 @@ public sealed class GatewayHandlerTests
     {
         var response = Json("""{"features":[]}""");
         response.Headers.ETag =
-            new System.Net.Http.Headers.EntityTagHeaderValue(""v1"");
+            new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"");
         response.Headers.TryAddWithoutValidation(
             "Set-Cookie",
             "session=upstream-secret");
@@ -155,7 +155,7 @@ public sealed class GatewayHandlerTests
 
         await HandleAsync(context, upstream, credentials, access, rate);
 
-        Assert.Equal(""v1"", context.Response.Headers.ETag.ToString());
+        Assert.Equal("\"v1\"", context.Response.Headers.ETag.ToString());
         Assert.False(context.Response.Headers.ContainsKey("Set-Cookie"));
         Assert.DoesNotContain(
             "arcgis-secret-token",
