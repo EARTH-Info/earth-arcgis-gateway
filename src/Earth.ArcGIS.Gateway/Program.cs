@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.Options;
@@ -28,6 +29,8 @@ var preAuthSourceTokenLimit =
     builder.Configuration.GetValue("Protection:PreAuthSourceTokenLimit", 300);
 var preAuthSourceTokensPerMinute =
     builder.Configuration.GetValue("Protection:PreAuthSourceTokensPerMinute", 300);
+var gatewayRequestTimeoutSeconds =
+    builder.Configuration.GetValue("Protection:GatewayRequestTimeoutSeconds", 45);
 
 if (maxConcurrentConnections <= 0 ||
     maxRequestBodyBytes <= 0 ||
@@ -36,7 +39,8 @@ if (maxConcurrentConnections <= 0 ||
     requestHeadersTimeoutSeconds <= 0 ||
     maxConcurrentArcGisRequests <= 0 ||
     preAuthSourceTokenLimit <= 0 ||
-    preAuthSourceTokensPerMinute <= 0)
+    preAuthSourceTokensPerMinute <= 0 ||
+    gatewayRequestTimeoutSeconds <= 0)
 {
     throw new InvalidOperationException(
         "Protection limits must all be positive.");
@@ -80,6 +84,17 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
     foreach (var address in trustedProxyAddresses)
         options.KnownProxies.Add(address);
+});
+
+builder.Services.AddRequestTimeouts(options =>
+{
+    options.AddPolicy(
+        "arcgis-gateway",
+        new RequestTimeoutPolicy
+        {
+            Timeout = TimeSpan.FromSeconds(gatewayRequestTimeoutSeconds),
+            TimeoutStatusCode = StatusCodes.Status504GatewayTimeout
+        });
 });
 
 builder.Services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidator>();
@@ -254,6 +269,19 @@ var authority = builder.Configuration["EarthId:Authority"]
 var audience = builder.Configuration["EarthId:Audience"]
     ?? throw new InvalidOperationException("EarthId:Audience is required.");
 
+if (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri) ||
+    authorityUri.Scheme != Uri.UriSchemeHttps ||
+    !string.IsNullOrEmpty(authorityUri.UserInfo) ||
+    !string.IsNullOrEmpty(authorityUri.Query) ||
+    !string.IsNullOrEmpty(authorityUri.Fragment))
+{
+    throw new InvalidOperationException(
+        "EarthId:Authority must be an absolute HTTPS URL without user-info, query, or fragment.");
+}
+
+if (string.IsNullOrWhiteSpace(audience))
+    throw new InvalidOperationException("EarthId:Audience cannot be empty.");
+
 builder.Services.AddAuthentication(options =>
     {
         options.DefaultAuthenticateScheme =
@@ -384,6 +412,7 @@ app.Use(async (context, next) =>
     await next();
 });
 app.UseRateLimiter();
+app.UseRequestTimeouts();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -428,7 +457,8 @@ app.MapGet("/health/ready", (
 app.MapGet("/health", () => Results.Redirect("/health/ready"));
 
 app.MapMethods("/arcgis/{**path}", new[] { "GET", "POST" }, GatewayHandler.HandleAsync)
-   .RequireAuthorization("earthid-user");
+   .RequireAuthorization("earthid-user")
+   .WithRequestTimeout("arcgis-gateway");
 
 AdminConsole.MapRoutes(app);
 
