@@ -99,7 +99,11 @@ public static class GatewayHandler
 
         var postBody = postBodyResult.Body;
 
-        var rateCost = rateCostPolicy.GetCost(resource, context.Request.Query);
+        var rateCost = rateCostPolicy.GetCost(
+            resource,
+            context.Request.Query,
+            postBody,
+            context.Request.ContentType);
         var rateDecision = await gatewayRateLimiter.ConsumeAsync(
             new RateLimitKey(subject, tenant, application.Id, resource.ServiceName, resource.LayerId, resource.Operation),
             rateCost.Units,
