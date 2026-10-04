@@ -37,7 +37,8 @@ public sealed class AccessPolicyClient(
             return Deny("access_api_not_configured");
 
         if (!Uri.TryCreate(application.AccessApiAuthorizeUrl, UriKind.Absolute, out var authorizeUri) ||
-            authorizeUri.Scheme != Uri.UriSchemeHttps)
+            authorizeUri.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrEmpty(authorizeUri.UserInfo))
             return Deny("access_api_invalid_configuration");
 
         try
