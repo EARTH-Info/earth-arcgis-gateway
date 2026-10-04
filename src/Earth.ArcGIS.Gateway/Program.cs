@@ -10,18 +10,63 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var maxConcurrentConnections =
+    builder.Configuration.GetValue<long>("Protection:MaxConcurrentConnections", 1024);
+var maxRequestBodyBytes =
+    builder.Configuration.GetValue<long>("Protection:MaxRequestBodyBytes", 2 * 1024 * 1024);
+var maxRequestHeadersTotalSize =
+    builder.Configuration.GetValue("Protection:MaxRequestHeadersTotalSize", 32 * 1024);
+var maxRequestHeaderCount =
+    builder.Configuration.GetValue("Protection:MaxRequestHeaderCount", 64);
+var requestHeadersTimeoutSeconds =
+    builder.Configuration.GetValue("Protection:RequestHeadersTimeoutSeconds", 10);
+var maxConcurrentArcGisRequests =
+    builder.Configuration.GetValue("Protection:MaxConcurrentArcGisRequests", 64);
+var preAuthSourceTokenLimit =
+    builder.Configuration.GetValue("Protection:PreAuthSourceTokenLimit", 300);
+var preAuthSourceTokensPerMinute =
+    builder.Configuration.GetValue("Protection:PreAuthSourceTokensPerMinute", 300);
+
+if (maxConcurrentConnections <= 0 ||
+    maxRequestBodyBytes <= 0 ||
+    maxRequestHeadersTotalSize <= 0 ||
+    maxRequestHeaderCount <= 0 ||
+    requestHeadersTimeoutSeconds <= 0 ||
+    maxConcurrentArcGisRequests <= 0 ||
+    preAuthSourceTokenLimit <= 0 ||
+    preAuthSourceTokensPerMinute <= 0)
+{
+    throw new InvalidOperationException(
+        "Protection limits must all be positive.");
+}
+
+var trustedProxies =
+    builder.Configuration.GetSection("Protection:TrustedProxies").Get<string[]>()
+    ?? Array.Empty<string>();
+
+var trustedProxyAddresses = new List<System.Net.IPAddress>();
+foreach (var configuredProxy in trustedProxies)
+{
+    if (string.IsNullOrWhiteSpace(configuredProxy))
+        continue;
+
+    if (!System.Net.IPAddress.TryParse(configuredProxy, out var address))
+    {
+        throw new InvalidOperationException(
+            $"Protection:TrustedProxies contains an invalid IP address: '{configuredProxy}'.");
+    }
+
+    trustedProxyAddresses.Add(address);
+}
+
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {
-    serverOptions.Limits.MaxConcurrentConnections =
-        builder.Configuration.GetValue<long?>("Protection:MaxConcurrentConnections", 1024);
-    serverOptions.Limits.MaxRequestBodySize =
-        builder.Configuration.GetValue<long>("Protection:MaxRequestBodyBytes", 2 * 1024 * 1024);
-    serverOptions.Limits.MaxRequestHeadersTotalSize =
-        builder.Configuration.GetValue("Protection:MaxRequestHeadersTotalSize", 32 * 1024);
-    serverOptions.Limits.MaxRequestHeaderCount =
-        builder.Configuration.GetValue("Protection:MaxRequestHeaderCount", 64);
-    serverOptions.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(
-        builder.Configuration.GetValue("Protection:RequestHeadersTimeoutSeconds", 10));
+    serverOptions.Limits.MaxConcurrentConnections = maxConcurrentConnections;
+    serverOptions.Limits.MaxRequestBodySize = maxRequestBodyBytes;
+    serverOptions.Limits.MaxRequestHeadersTotalSize = maxRequestHeadersTotalSize;
+    serverOptions.Limits.MaxRequestHeaderCount = maxRequestHeaderCount;
+    serverOptions.Limits.RequestHeadersTimeout =
+        TimeSpan.FromSeconds(requestHeadersTimeoutSeconds);
 });
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
@@ -31,13 +76,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
         ForwardedHeaders.XForwardedProto;
     options.ForwardLimit = 1;
 
-    foreach (var configuredProxy in
-             builder.Configuration.GetSection("Protection:TrustedProxies").Get<string[]>()
-             ?? Array.Empty<string>())
-    {
-        if (System.Net.IPAddress.TryParse(configuredProxy, out var address))
-            options.KnownProxies.Add(address);
-    }
+    foreach (var address in trustedProxyAddresses)
+        options.KnownProxies.Add(address);
 });
 
 builder.Services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidator>();
@@ -53,8 +93,7 @@ builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>()
 builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
 builder.Services.AddSingleton<IRateCostPolicy, RateCostPolicy>();
 builder.Services.AddSingleton<IArcGisUpstreamGate>(_ =>
-    new ArcGisUpstreamGate(
-        builder.Configuration.GetValue("Protection:MaxConcurrentArcGisRequests", 64)));
+    new ArcGisUpstreamGate(maxConcurrentArcGisRequests));
 builder.Services.AddSingleton<AdminAuditStore>();
 builder.Services.AddSingleton<IConnectionMultiplexerAccessor, ConnectionMultiplexerAccessor>();
 
@@ -126,6 +165,12 @@ builder.Services.AddSingleton<FileTelemetrySpool>();
 var clickHouseBaseUrl = builder.Configuration["Telemetry:ClickHouseBaseUrl"];
 if (string.IsNullOrWhiteSpace(clickHouseBaseUrl))
 {
+    if (builder.Environment.IsProduction())
+    {
+        throw new InvalidOperationException(
+            "Telemetry:ClickHouseBaseUrl is required in Production so audit telemetry remains durable.");
+    }
+
     builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
 }
 else
@@ -219,11 +264,6 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-    var tokenLimit =
-        builder.Configuration.GetValue("Protection:PreAuthSourceTokenLimit", 300);
-    var tokensPerPeriod =
-        builder.Configuration.GetValue("Protection:PreAuthSourceTokensPerMinute", 300);
-
     options.GlobalLimiter =
         PartitionedRateLimiter.Create<HttpContext, string>(context =>
         {
@@ -235,8 +275,8 @@ builder.Services.AddRateLimiter(options =>
                 source,
                 _ => new TokenBucketRateLimiterOptions
                 {
-                    TokenLimit = tokenLimit,
-                    TokensPerPeriod = tokensPerPeriod,
+                    TokenLimit = preAuthSourceTokenLimit,
+                    TokensPerPeriod = preAuthSourceTokensPerMinute,
                     ReplenishmentPeriod = TimeSpan.FromMinutes(1),
                     AutoReplenishment = true,
                     QueueLimit = 0
