@@ -174,7 +174,7 @@ public static class AdminConsole
             }
 
             var adminSubject = context.User.FindFirstValue("sub") ?? "unknown";
-            var duration = request.Minutes is null
+            TimeSpan? duration = request.Minutes is null
                 ? null
                 : TimeSpan.FromMinutes(request.Minutes.Value);
 
