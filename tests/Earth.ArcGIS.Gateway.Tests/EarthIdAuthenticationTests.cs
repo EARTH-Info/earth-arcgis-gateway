@@ -101,7 +101,12 @@ public sealed class EarthIdAuthenticationTests
         parameters.ValidIssuer = Issuer;
         parameters.IssuerSigningKey = SigningKey;
 
-        return new JwtSecurityTokenHandler().ValidateToken(
+        var handler = new JwtSecurityTokenHandler
+        {
+            MapInboundClaims = false
+        };
+
+        return handler.ValidateToken(
             token,
             parameters,
             out _);
@@ -122,7 +127,7 @@ public sealed class EarthIdAuthenticationTests
             issuer,
             audience,
             claims,
-            notBefore: DateTime.UtcNow.AddMinutes(-1),
+            notBefore: expires.AddMinutes(-10),
             expires: expires,
             signingCredentials: new SigningCredentials(
                 signingKey,
