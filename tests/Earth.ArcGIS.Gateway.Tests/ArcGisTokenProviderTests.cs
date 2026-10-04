@@ -59,6 +59,16 @@ public sealed class ArcGisTokenProviderTests
     }
 
     [Fact]
+    public async Task InvalidJsonTokenResponseIsRejectedAsControlledProviderFailure()
+    {
+        var provider = Create(new InvalidJsonHandler());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.GetTokenAsync(
+                TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task MalformedTokenResponseIsRejected()
     {
         var handler = new MalformedHandler();
@@ -117,6 +127,17 @@ public sealed class ArcGisTokenProviderTests
 
         private static HttpResponseMessage Json(string body) =>
             new(HttpStatusCode.OK) { Content = new StringContent(body) };
+    }
+
+    private sealed class InvalidJsonHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{not-json")
+            });
     }
 
     private sealed class MalformedHandler : HttpMessageHandler
