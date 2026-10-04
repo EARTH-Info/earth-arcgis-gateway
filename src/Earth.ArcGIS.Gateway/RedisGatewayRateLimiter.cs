@@ -7,63 +7,124 @@ namespace Earth.ArcGIS.Gateway;
 public sealed class RedisRateLimitOptions
 {
     public string? ConnectionString { get; set; }
-    public int Capacity { get; set; } = 240;
-    public int WindowSeconds { get; set; } = 60;
 }
 
 public sealed class RedisGatewayRateLimiter(
     IConnectionMultiplexer redis,
-    RedisRateLimitOptions options,
+    GatewayRateLimitOptions options,
     ILogger<RedisGatewayRateLimiter> logger) : IGatewayRateLimiter
 {
     private const string Script = """
-local current = redis.call('GET', KEYS[1])
-local capacity = tonumber(ARGV[1])
-local cost = tonumber(ARGV[2])
-local window = tonumber(ARGV[3])
+local cost = tonumber(ARGV[1])
+local capacities = { tonumber(ARGV[2]), tonumber(ARGV[4]), tonumber(ARGV[6]) }
+local windows = { tonumber(ARGV[3]), tonumber(ARGV[5]), tonumber(ARGV[7]) }
+local current = {}
 
-if not current then
-  if capacity < cost then
-    return {0, capacity, window}
+for i = 1, 3 do
+  local value = redis.call('GET', KEYS[i])
+  if value then
+    current[i] = tonumber(value)
+  else
+    current[i] = capacities[i]
   end
-  local remaining = capacity - cost
-  redis.call('SET', KEYS[1], remaining, 'EX', window)
-  return {1, remaining, 0}
+
+  if current[i] < cost then
+    local ttl = redis.call('TTL', KEYS[i])
+    if ttl < 1 then ttl = windows[i] end
+    return {0, current[i], ttl, i}
+  end
 end
 
-current = tonumber(current)
-if current < cost then
-  local ttl = redis.call('TTL', KEYS[1])
-  if ttl < 1 then ttl = window end
-  return {0, current, ttl}
+local remaining = {}
+for i = 1, 3 do
+  if redis.call('EXISTS', KEYS[i]) == 0 then
+    remaining[i] = capacities[i] - cost
+    redis.call('SET', KEYS[i], remaining[i], 'EX', windows[i])
+  else
+    remaining[i] = redis.call('DECRBY', KEYS[i], cost)
+  end
 end
 
-local remaining = redis.call('DECRBY', KEYS[1], cost)
-return {1, remaining, 0}
+local minimum = remaining[1]
+if remaining[2] < minimum then minimum = remaining[2] end
+if remaining[3] < minimum then minimum = remaining[3] end
+return {1, minimum, 0, 0}
 """;
 
-    public async ValueTask<RateLimitDecision> ConsumeAsync(
-        RateLimitKey key, int units, CancellationToken cancellationToken)
+    public RedisGatewayRateLimiter(
+        IConnectionMultiplexer redis,
+        GatewayRateLimitOptions options,
+        ILogger<RedisGatewayRateLimiter> logger,
+        bool validateOptions = true)
+        : this(redis, options, logger)
     {
-        if (units <= 0 || units > options.Capacity)
-            return new(false, 0, options.WindowSeconds, "invalid_or_excessive_cost");
+        if (validateOptions)
+            options.Validate();
+    }
+
+    public async ValueTask<RateLimitDecision> ConsumeAsync(
+        RateLimitKey key,
+        int units,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (units <= 0 || units > options.BurstCapacity)
+        {
+            return new(
+                false,
+                0,
+                options.BurstWindowSeconds,
+                "invalid_or_excessive_cost");
+        }
 
         try
         {
             var db = redis.GetDatabase();
+            var prefix = BuildKeyPrefix(key);
             var result = (RedisResult[]?)await db.ScriptEvaluateAsync(
-                Script,
-                [BuildKey(key)],
-                [options.Capacity, units, options.WindowSeconds])
+                    Script,
+                    [
+                        $"{prefix}:burst",
+                        $"{prefix}:sustained",
+                        $"{prefix}:daily"
+                    ],
+                    [
+                        units,
+                        options.BurstCapacity,
+                        options.BurstWindowSeconds,
+                        options.SustainedCapacity,
+                        options.SustainedWindowSeconds,
+                        options.DailyCapacity,
+                        options.DailyWindowSeconds
+                    ])
                 .WaitAsync(cancellationToken);
 
-            if (result is null || result.Length != 3)
-                return new(false, 0, options.WindowSeconds, "rate_backend_malformed");
+            if (result is null || result.Length != 4)
+            {
+                return new(
+                    false,
+                    0,
+                    options.BurstWindowSeconds,
+                    "rate_backend_malformed");
+            }
 
             var allowed = (long)result[0] == 1;
             var remaining = checked((int)(long)result[1]);
             var retry = checked((int)(long)result[2]);
-            return new(allowed, remaining, retry, allowed ? "rate_allow" : "weighted_budget_exceeded");
+            var exhaustedWindow = checked((int)(long)result[3]);
+
+            return new(
+                allowed,
+                remaining,
+                retry,
+                allowed ? "rate_allow" : exhaustedWindow switch
+                {
+                    1 => "burst_budget_exceeded",
+                    2 => "sustained_budget_exceeded",
+                    3 => "daily_budget_exceeded",
+                    _ => "weighted_budget_exceeded"
+                });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -72,13 +133,18 @@ return {1, remaining, 0}
         catch (Exception ex) when (ex is RedisException or InvalidCastException or OverflowException)
         {
             logger.LogError(ex, "redis_rate_limit_failure");
-            return new(false, 0, options.WindowSeconds, "rate_backend_unavailable");
+            return new(
+                false,
+                0,
+                options.BurstWindowSeconds,
+                "rate_backend_unavailable");
         }
     }
 
-    private static RedisKey BuildKey(RateLimitKey key)
+    private static string BuildKeyPrefix(RateLimitKey key)
     {
-        var raw = $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}\n{key.Service}\n{key.LayerId?.ToString() ?? "-"}\n{key.Operation}";
+        var raw =
+            $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}\n{key.Service}\n{key.LayerId?.ToString() ?? "-"}\n{key.Operation}";
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
         return $"eiag:rate:{hash}";
     }
