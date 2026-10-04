@@ -18,19 +18,27 @@ public sealed class RedisGatewayRateLimiter(
 {
     private const string Script = """
 local current = redis.call('GET', KEYS[1])
-if not current then
-  current = tonumber(ARGV[1])
-else
-  current = tonumber(current)
-end
+local capacity = tonumber(ARGV[1])
 local cost = tonumber(ARGV[2])
+local window = tonumber(ARGV[3])
+
+if not current then
+  if capacity < cost then
+    return {0, capacity, window}
+  end
+  local remaining = capacity - cost
+  redis.call('SET', KEYS[1], remaining, 'EX', window)
+  return {1, remaining, 0}
+end
+
+current = tonumber(current)
 if current < cost then
   local ttl = redis.call('TTL', KEYS[1])
-  if ttl < 1 then ttl = tonumber(ARGV[3]) end
+  if ttl < 1 then ttl = window end
   return {0, current, ttl}
 end
-local remaining = current - cost
-redis.call('SET', KEYS[1], remaining, 'EX', ARGV[3])
+
+local remaining = redis.call('DECRBY', KEYS[1], cost)
 return {1, remaining, 0}
 """;
 
@@ -46,7 +54,8 @@ return {1, remaining, 0}
             var result = (RedisResult[]?)await db.ScriptEvaluateAsync(
                 Script,
                 [BuildKey(key)],
-                [options.Capacity, units, options.WindowSeconds]);
+                [options.Capacity, units, options.WindowSeconds])
+                .WaitAsync(cancellationToken);
 
             if (result is null || result.Length != 3)
                 return new(false, 0, options.WindowSeconds, "rate_backend_malformed");
@@ -56,7 +65,11 @@ return {1, remaining, 0}
             var retry = checked((int)(long)result[2]);
             return new(allowed, remaining, retry, allowed ? "rate_allow" : "weighted_budget_exceeded");
         }
-        catch (RedisException ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is RedisException or InvalidCastException or OverflowException)
         {
             logger.LogError(ex, "redis_rate_limit_failure");
             return new(false, 0, options.WindowSeconds, "rate_backend_unavailable");
@@ -65,7 +78,7 @@ return {1, remaining, 0}
 
     private static RedisKey BuildKey(RateLimitKey key)
     {
-        var raw = $"{key.EarthIdSub}\n{key.Application}\n{key.Service}\n{key.LayerId?.ToString() ?? "-"}";
+        var raw = $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}\n{key.Service}\n{key.LayerId?.ToString() ?? "-"}\n{key.Operation}";
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
         return $"eiag:rate:{hash}";
     }
