@@ -9,6 +9,18 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.WebHost.ConfigureKestrel(serverOptions =>
+{
+    serverOptions.Limits.MaxRequestBodySize =
+        builder.Configuration.GetValue<long>("Protection:MaxRequestBodyBytes", 2 * 1024 * 1024);
+    serverOptions.Limits.MaxRequestHeadersTotalSize =
+        builder.Configuration.GetValue("Protection:MaxRequestHeadersTotalSize", 32 * 1024);
+    serverOptions.Limits.MaxRequestHeaderCount =
+        builder.Configuration.GetValue("Protection:MaxRequestHeaderCount", 64);
+    serverOptions.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(
+        builder.Configuration.GetValue("Protection:RequestHeadersTimeoutSeconds", 10));
+});
+
 builder.Services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<ApplicationOptions>, ApplicationOptionsValidator>();
 builder.Services.AddOptions<GatewayOptions>()
@@ -21,6 +33,9 @@ builder.Services.AddSingleton<IApplicationIdentityResolver, ApplicationIdentityR
 builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>();
 builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
 builder.Services.AddSingleton<IRateCostPolicy, RateCostPolicy>();
+builder.Services.AddSingleton<IArcGisUpstreamGate>(_ =>
+    new ArcGisUpstreamGate(
+        builder.Configuration.GetValue("Protection:MaxConcurrentArcGisRequests", 64)));
 
 var rateLimitOptions = new GatewayRateLimitOptions
 {
