@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 
 namespace Earth.ArcGIS.Gateway;
 
-public sealed record GatewayApplication(string Id, string? AccessApiBaseUrl);
+public sealed record GatewayApplication(string Id, string? AccessApiAuthorizeUrl);
 
 public interface IApplicationIdentityResolver
 {
@@ -30,7 +30,7 @@ public sealed class ApplicationIdentityResolver(IOptions<ApplicationOptions> opt
             return false;
         }
 
-        application = new GatewayApplication(matches[0].Key, matches[0].Value.AccessApiBaseUrl);
+        application = new GatewayApplication(matches[0].Key, matches[0].Value.AccessApiAuthorizeUrl);
         return true;
     }
 }
