@@ -37,6 +37,9 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
             rawPath.Contains("//", StringComparison.Ordinal))
             return false;
 
+        if (ContainsUnsafePercentEncoding(rawPath))
+            return false;
+
         string decoded;
         try
         {
@@ -47,8 +50,7 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
             return false;
         }
 
-        if (!string.Equals(decoded, rawPath, StringComparison.Ordinal) ||
-            decoded.Contains("..", StringComparison.Ordinal) ||
+        if (decoded.Contains("..", StringComparison.Ordinal) ||
             decoded.Contains('\\') ||
             decoded.Contains("//", StringComparison.Ordinal))
             return false;
@@ -132,6 +134,39 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
          (value[0] == '-' &&
           value.Length > 1 &&
           value[1..].All(char.IsDigit)));
+
+    private static bool ContainsUnsafePercentEncoding(string value)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (value[index] != '%')
+                continue;
+
+            if (index + 2 >= value.Length ||
+                !Uri.IsHexDigit(value[index + 1]) ||
+                !Uri.IsHexDigit(value[index + 2]))
+                return true;
+
+            var encoded = Convert.ToByte(
+                value.Substring(index + 1, 2),
+                16);
+
+            if (encoded is
+                    (byte)'/' or
+                    (byte)'\\' or
+                    (byte)'.' or
+                    (byte)'%' or
+                    (byte)'?' or
+                    (byte)'#' ||
+                encoded < 0x20 ||
+                encoded == 0x7F)
+                return true;
+
+            index += 2;
+        }
+
+        return false;
+    }
 
     private static bool IsUnsafeSegment(string segment)
     {
