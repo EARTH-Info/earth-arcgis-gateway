@@ -357,7 +357,32 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 app.UseForwardedHeaders();
+
+if (app.Environment.IsProduction())
+    app.UseHsts();
+
 app.UseHttpsRedirection();
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers.XContentTypeOptions = "nosniff";
+        context.Response.Headers.XFrameOptions = "DENY";
+        context.Response.Headers["Referrer-Policy"] = "no-referrer";
+
+        if (context.Request.Path.StartsWithSegments("/admin"))
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers["Content-Security-Policy"] =
+                "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; " +
+                "form-action 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'";
+        }
+
+        return Task.CompletedTask;
+    });
+
+    await next();
+});
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
