@@ -167,6 +167,10 @@ builder.Services.AddHttpClient("arcgis", c => c.Timeout = TimeSpan.FromSeconds(3
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
     {
         AllowAutoRedirect = false,
+        AutomaticDecompression =
+            System.Net.DecompressionMethods.GZip |
+            System.Net.DecompressionMethods.Deflate |
+            System.Net.DecompressionMethods.Brotli,
         ConnectTimeout = TimeSpan.FromSeconds(5),
         MaxConnectionsPerServer = 64,
         MaxResponseHeadersLength = 64
