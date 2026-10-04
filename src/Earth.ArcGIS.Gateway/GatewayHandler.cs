@@ -337,8 +337,12 @@ public static class GatewayHandler
     {
         target = null!;
 
-        if (!Uri.TryCreate(baseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var baseUri) ||
-            baseUri.Scheme != Uri.UriSchemeHttps)
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) ||
+            baseUri.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrEmpty(baseUri.UserInfo) ||
+            !string.IsNullOrEmpty(baseUri.Query) ||
+            !string.IsNullOrEmpty(baseUri.Fragment) ||
+            baseUri.AbsolutePath != "/")
             return false;
 
         if (!Uri.TryCreate(baseUri, normalizedPath.TrimStart('/') + queryString.Value, out var candidate))
