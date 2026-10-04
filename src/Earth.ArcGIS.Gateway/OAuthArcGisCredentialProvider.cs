@@ -102,9 +102,10 @@ public sealed class OAuthArcGisCredentialProvider(
 
         await using var stream =
             await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(
+        using var document = await ParseJsonAsync(
             stream,
-            cancellationToken: cancellationToken);
+            "ArcGIS OAuth token response is not valid JSON.",
+            cancellationToken);
         var root = document.RootElement;
 
         if (root.TryGetProperty("error", out _))
@@ -174,9 +175,10 @@ public sealed class OAuthArcGisCredentialProvider(
 
         await using var stream =
             await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(
+        using var document = await ParseJsonAsync(
             stream,
-            cancellationToken: cancellationToken);
+            "ArcGIS OAuth federated token response is not valid JSON.",
+            cancellationToken);
         var root = document.RootElement;
 
         if (root.TryGetProperty("error", out _))
@@ -199,6 +201,23 @@ public sealed class OAuthArcGisCredentialProvider(
             tokenElement.GetString()!,
             DateTimeOffset.FromUnixTimeMilliseconds(
                 expiresMilliseconds));
+    }
+
+    private static async Task<JsonDocument> ParseJsonAsync(
+        Stream stream,
+        string errorMessage,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await JsonDocument.ParseAsync(
+                stream,
+                cancellationToken: cancellationToken);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(errorMessage, ex);
+        }
     }
 
     private static bool TryReadEpochMilliseconds(
