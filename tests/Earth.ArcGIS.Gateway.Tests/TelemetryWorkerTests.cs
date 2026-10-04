@@ -59,6 +59,70 @@ public sealed class TelemetryWorkerTests
         }
     }
 
+
+    [Fact]
+    public async Task PartialBatchFlushesWithinConfiguredInterval()
+    {
+        var queue = new TelemetryQueue();
+        var sink = new CapturingSink();
+        var worker = new TelemetryWorker(
+            queue,
+            sink,
+            NullLogger<TelemetryWorker>.Instance);
+
+        Assert.True(queue.TryWrite(new TelemetryEvent(
+            DateTimeOffset.UtcNow,
+            "sub-1",
+            "tenant-1",
+            "jtuwma",
+            "Land/Parcels",
+            "FeatureServer",
+            0,
+            "query",
+            "GET",
+            200,
+            5,
+            "ALLOW",
+            "policy_allow",
+            "v1",
+            "cid-partial")));
+
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+
+        try
+        {
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(4);
+            while (sink.Events.Count == 0 &&
+                   DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(
+                    50,
+                    TestContext.Current.CancellationToken);
+            }
+
+            Assert.Single(sink.Events);
+            Assert.Equal("cid-partial", sink.Events[0].CorrelationId);
+        }
+        finally
+        {
+            await worker.StopAsync(
+                TestContext.Current.CancellationToken);
+        }
+    }
+
+    private sealed class CapturingSink : ITelemetrySink
+    {
+        public List<TelemetryEvent> Events { get; } = [];
+
+        public Task WriteBatchAsync(
+            IReadOnlyList<TelemetryEvent> events,
+            CancellationToken cancellationToken)
+        {
+            Events.AddRange(events);
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class FailOnceSink : ITelemetrySink
     {
         private int calls;
