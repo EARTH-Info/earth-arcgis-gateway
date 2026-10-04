@@ -4,15 +4,26 @@ using Microsoft.Extensions.Options;
 
 namespace Earth.ArcGIS.Gateway;
 
+public interface IArcGisCredentialProvider
+{
+    Task<string> GetTokenAsync(CancellationToken cancellationToken);
+    void InvalidateToken();
+}
+
 public sealed class ArcGisTokenProvider(
-    HttpClient http,
+    IHttpClientFactory clients,
     IOptions<GatewayOptions> options,
-    ILogger<ArcGisTokenProvider> logger)
+    ILogger<ArcGisTokenProvider> logger) : IArcGisCredentialProvider
 {
     private readonly GatewayOptions cfg = options.Value;
     private readonly SemaphoreSlim gate = new(1, 1);
     private TokenState? portalToken;
     private TokenState? serverToken;
+
+    public Task<string> GetTokenAsync(CancellationToken cancellationToken) =>
+        GetServerTokenAsync(cancellationToken);
+
+    public void InvalidateToken() => InvalidateServerToken();
 
     public async Task<string> GetServerTokenAsync(CancellationToken ct)
     {
@@ -94,6 +105,7 @@ public sealed class ArcGisTokenProvider(
             throw new InvalidOperationException("ArcGIS portal token endpoint must be an absolute HTTPS URL.");
         }
 
+        var http = clients.CreateClient("arcgis-token");
         using var response = await http.PostAsync(endpoint, form, ct);
         response.EnsureSuccessStatusCode();
 
