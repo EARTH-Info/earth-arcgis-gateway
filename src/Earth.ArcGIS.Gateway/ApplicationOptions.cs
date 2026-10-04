@@ -10,5 +10,5 @@ public sealed class ApplicationRegistration
 {
     public string[] Audiences { get; set; } = Array.Empty<string>();
     public string[] ClientIds { get; set; } = Array.Empty<string>();
-    public string? AccessApiBaseUrl { get; set; }
+    public string? AccessApiAuthorizeUrl { get; set; }
 }
