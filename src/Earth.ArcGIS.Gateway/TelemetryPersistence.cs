@@ -120,7 +120,9 @@ public sealed class ClickHouseTelemetrySink(
 
         var query = $"INSERT INTO {cfg.Table} FORMAT JSONEachRow";
         var relative =
-            $"?database={Uri.EscapeDataString(cfg.Database)}&query={Uri.EscapeDataString(query)}";
+            $"?database={Uri.EscapeDataString(cfg.Database)}" +
+            $"&query={Uri.EscapeDataString(query)}" +
+            "&date_time_input_format=best_effort";
         uri = new Uri(baseUri, relative);
         return true;
     }
