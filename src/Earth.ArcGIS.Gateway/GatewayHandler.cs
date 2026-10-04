@@ -53,6 +53,16 @@ public static class GatewayHandler
             return;
         }
 
+        var postBodyResult = await ReadPostBodyAsync(context);
+        if (postBodyResult.TooLarge)
+        {
+            Deny(context, telemetry, logger, subject, tenant, application.Id, resource,
+                StatusCodes.Status413PayloadTooLarge, "request_body_too_large", cid, normalized);
+            return;
+        }
+
+        var postBody = postBodyResult.Body;
+
         var rateCost = rateCostPolicy.GetCost(resource, context.Request.Query);
         var rateDecision = await gatewayRateLimiter.ConsumeAsync(
             new RateLimitKey(subject, tenant, application.Id, resource.ServiceName, resource.LayerId, resource.Operation),
@@ -90,51 +100,6 @@ public static class GatewayHandler
                 StatusCodes.Status503ServiceUnavailable, "upstream_configuration_invalid", cid, normalized,
                 accessDecision.PolicyVersion);
             return;
-        }
-
-        byte[]? postBody = null;
-        if (HttpMethods.IsPost(context.Request.Method))
-        {
-            if (context.Request.ContentLength is > MaxRequestBodyBytes)
-            {
-                Deny(context, telemetry, logger, subject, tenant, application.Id, resource,
-                    StatusCodes.Status413PayloadTooLarge, "request_body_too_large", cid, normalized,
-                    accessDecision.PolicyVersion);
-                return;
-            }
-
-            using var ms = new MemoryStream();
-            var buffer = new byte[81920];
-            while (true)
-            {
-                var remaining = MaxRequestBodyBytes + 1 - ms.Length;
-                if (remaining <= 0)
-                {
-                    Deny(context, telemetry, logger, subject, tenant, application.Id, resource,
-                        StatusCodes.Status413PayloadTooLarge, "request_body_too_large", cid, normalized,
-                        accessDecision.PolicyVersion);
-                    return;
-                }
-
-                var read = await context.Request.Body.ReadAsync(
-                    buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)),
-                    context.RequestAborted);
-
-                if (read == 0)
-                    break;
-
-                await ms.WriteAsync(buffer.AsMemory(0, read), context.RequestAborted);
-            }
-
-            if (ms.Length > MaxRequestBodyBytes)
-            {
-                Deny(context, telemetry, logger, subject, tenant, application.Id, resource,
-                    StatusCodes.Status413PayloadTooLarge, "request_body_too_large", cid, normalized,
-                    accessDecision.PolicyVersion);
-                return;
-            }
-
-            postBody = ms.ToArray();
         }
 
         var sw = Stopwatch.StartNew();
@@ -207,6 +172,41 @@ public static class GatewayHandler
         {
             result?.Dispose();
         }
+    }
+
+    private static async Task<(byte[]? Body, bool TooLarge)> ReadPostBodyAsync(HttpContext context)
+    {
+        if (!HttpMethods.IsPost(context.Request.Method))
+            return (null, false);
+
+        if (context.Request.ContentLength is > MaxRequestBodyBytes)
+            return (null, true);
+
+        using var bufferStream = new MemoryStream();
+        var buffer = new byte[81920];
+
+        while (true)
+        {
+            var remaining = MaxRequestBodyBytes + 1 - bufferStream.Length;
+            if (remaining <= 0)
+                return (null, true);
+
+            var read = await context.Request.Body.ReadAsync(
+                buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)),
+                context.RequestAborted);
+
+            if (read == 0)
+                break;
+
+            await bufferStream.WriteAsync(
+                buffer.AsMemory(0, read),
+                context.RequestAborted);
+        }
+
+        if (bufferStream.Length > MaxRequestBodyBytes)
+            return (null, true);
+
+        return (bufferStream.ToArray(), false);
     }
 
     private static bool IsWithinPrefix(string path, string prefix)
