@@ -1,7 +1,9 @@
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Earth.ArcGIS.Gateway;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
@@ -107,6 +109,26 @@ var adminOptions = new AdminOptions
         builder.Configuration.GetValue("Admin:RecentTelemetryLimit", 500)
 };
 builder.Services.AddSingleton(adminOptions);
+
+var adminOidcClientId = builder.Configuration["Admin:OidcClientId"];
+var adminOidcClientSecret = builder.Configuration["Admin:OidcClientSecret"];
+if (builder.Environment.IsProduction() &&
+    (string.IsNullOrWhiteSpace(adminOidcClientId) ||
+     string.IsNullOrWhiteSpace(adminOidcClientSecret)))
+{
+    throw new InvalidOperationException(
+        "Admin:OidcClientId and Admin:OidcClientSecret are required in Production for the browser Admin Console.");
+}
+
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-CSRF-TOKEN";
+    options.Cookie.Name = "__Host-eiag-csrf";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.Path = "/";
+});
 
 var rateLimitOptions = new GatewayRateLimitOptions
 {
@@ -232,8 +254,14 @@ var authority = builder.Configuration["EarthId:Authority"]
 var audience = builder.Configuration["EarthId:Audience"]
     ?? throw new InvalidOperationException("EarthId:Audience is required.");
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(o =>
+builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme =
+            JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme =
+            JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, o =>
     {
         o.Authority = authority;
         o.Audience = audience;
@@ -241,11 +269,52 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         o.MapInboundClaims = false;
         o.TokenValidationParameters =
             EarthIdAuthentication.CreateValidationParameters(audience);
-    });
+    })
+    .AddCookie(AdminConsole.CookieScheme, options =>
+    {
+        options.Cookie.Name = "__Host-eiag-admin";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.Path = "/";
+        options.LoginPath = "/admin/login";
+        options.AccessDeniedPath = "/admin/denied";
+        options.SlidingExpiration = true;
+        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+    })
+    .AddOpenIdConnect(AdminConsole.OidcScheme, options =>
+    {
+        options.SignInScheme = AdminConsole.CookieScheme;
+        options.Authority = authority;
+        options.ClientId = adminOidcClientId ?? "";
+        options.ClientSecret = adminOidcClientSecret;
+        options.ResponseType = "code";
+        options.UsePkce = true;
+        options.RequireHttpsMetadata = true;
+        options.MapInboundClaims = false;
+        options.SaveTokens = false;
+        options.CallbackPath = "/signin-oidc";
+        options.Scope.Clear();
+        options.Scope.Add("openid");
+        options.Scope.Add("profile");
+    })
+    .AddPolicyScheme(
+        AdminConsole.PolicyScheme,
+        AdminConsole.PolicyScheme,
+        options =>
+        {
+            options.ForwardDefaultSelector = context =>
+                context.Request.Headers.Authorization.ToString()
+                    .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                    ? JwtBearerDefaults.AuthenticationScheme
+                    : AdminConsole.CookieScheme;
+        });
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("earthid-user", policy =>
     {
+        policy.AddAuthenticationSchemes(
+            JwtBearerDefaults.AuthenticationScheme);
         policy.RequireAuthenticatedUser();
         policy.RequireAssertion(context =>
             EarthIdAuthentication.HasStableSubject(context.User));
@@ -253,6 +322,8 @@ builder.Services.AddAuthorization(options =>
 
     options.AddPolicy("gateway-admin", policy =>
     {
+        policy.AddAuthenticationSchemes(
+            AdminConsole.PolicyScheme);
         policy.RequireAuthenticatedUser();
         policy.RequireAssertion(context =>
             EarthIdAuthentication.HasStableSubject(context.User) &&
