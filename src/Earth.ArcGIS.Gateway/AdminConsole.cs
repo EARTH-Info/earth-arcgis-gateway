@@ -312,7 +312,7 @@ public static class AdminConsole
 
     private static bool IsLocalReturnUrl(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
-        value.StartsWith('/', StringComparison.Ordinal) &&
+        value.StartsWith("/", StringComparison.Ordinal) &&
         !value.StartsWith("//", StringComparison.Ordinal) &&
         !value.StartsWith("/\\", StringComparison.Ordinal);
 
