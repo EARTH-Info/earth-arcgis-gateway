@@ -13,7 +13,7 @@ public static class GatewayHandler
     private const int MaxAuthProbeBytes = 64 * 1024;
 
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
-        ArcGisTokenProvider tokens, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
+        IArcGisCredentialProvider credentials, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
         IArcGisResourceResolver resources, IArcGisOperationPolicy operationPolicy, IRateCostPolicy rateCostPolicy,
         IGatewayRateLimiter gatewayRateLimiter, IAccessPolicyClient accessPolicy,
         ITelemetryQueue telemetry, ILoggerFactory loggerFactory)
@@ -143,20 +143,20 @@ public static class GatewayHandler
 
         try
         {
-            var token = await tokens.GetServerTokenAsync(context.RequestAborted);
+            var token = await credentials.GetTokenAsync(context.RequestAborted);
             result = await SendAsync(client, target, context, postBody, token, cid);
 
             if (IsAuthFailure(result))
             {
                 result.Dispose();
                 result = null;
-                tokens.InvalidateServerToken();
+                credentials.InvalidateToken();
 
                 logger.LogWarning(
                     "arcgis_auth_retry earthid_sub={EarthIdSub} path={Path} correlation_id={CorrelationId}",
                     subject, normalized, cid);
 
-                token = await tokens.GetServerTokenAsync(context.RequestAborted);
+                token = await credentials.GetTokenAsync(context.RequestAborted);
                 result = await SendAsync(client, target, context, postBody, token, cid);
             }
 
