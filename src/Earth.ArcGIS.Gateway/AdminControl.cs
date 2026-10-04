@@ -30,6 +30,22 @@ public static class AdminAuthorization
     }
 }
 
+public interface IConnectionMultiplexerAccessor
+{
+    bool Configured { get; }
+    bool IsConnected { get; }
+}
+
+public sealed class ConnectionMultiplexerAccessor(IServiceProvider services)
+    : IConnectionMultiplexerAccessor
+{
+    public bool Configured =>
+        services.GetService<StackExchange.Redis.IConnectionMultiplexer>() is not null;
+
+    public bool IsConnected =>
+        services.GetService<StackExchange.Redis.IConnectionMultiplexer>()?.IsConnected ?? false;
+}
+
 public sealed record UserBlock(
     string EarthIdSub,
     string Reason,
