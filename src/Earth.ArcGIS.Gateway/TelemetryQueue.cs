@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 
 namespace Earth.ArcGIS.Gateway;
@@ -8,13 +9,16 @@ public interface ITelemetryQueue
     IAsyncEnumerable<TelemetryEvent> ReadAllAsync(CancellationToken cancellationToken);
     ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken);
     bool TryRead(out TelemetryEvent? item);
+    IReadOnlyList<TelemetryEvent> GetRecent(int max);
     long Accepted { get; }
     long Dropped { get; }
 }
 
 public sealed class TelemetryQueue : ITelemetryQueue
 {
+    private const int RecentCapacity = 1_000;
     private readonly Channel<TelemetryEvent> _channel;
+    private readonly ConcurrentQueue<TelemetryEvent> _recent = new();
     private long _accepted;
     private long _dropped;
 
@@ -34,6 +38,10 @@ public sealed class TelemetryQueue : ITelemetryQueue
 
     public bool TryWrite(TelemetryEvent item)
     {
+        _recent.Enqueue(item);
+        while (_recent.Count > RecentCapacity)
+            _recent.TryDequeue(out _);
+
         if (_channel.Writer.TryWrite(item))
         {
             Interlocked.Increment(ref _accepted);
@@ -60,4 +68,10 @@ public sealed class TelemetryQueue : ITelemetryQueue
         item = null;
         return false;
     }
+
+    public IReadOnlyList<TelemetryEvent> GetRecent(int max) =>
+        _recent
+            .Reverse()
+            .Take(Math.Clamp(max, 1, RecentCapacity))
+            .ToArray();
 }
