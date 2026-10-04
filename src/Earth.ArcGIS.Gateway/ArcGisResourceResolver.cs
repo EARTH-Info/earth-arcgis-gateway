@@ -111,7 +111,9 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
             ? segments[(cursor + 1)..]
             : Array.Empty<string>();
 
-        var canonical = "/" + string.Join('/', segments);
+        var canonical = "/" + string.Join(
+            '/',
+            segments.Select(Uri.EscapeDataString));
 
         resource = new ArcGisResource(
             string.Join('/', segments[3..(typeIndex + 1)]),
