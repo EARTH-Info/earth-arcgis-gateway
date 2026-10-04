@@ -41,10 +41,26 @@ public sealed class ArcGisResourceResolverTests
             string.Join('|', resource.OperationTail ?? []));
     }
 
+    [Fact]
+    public void AllowsSafeEncodedServiceNameAndCanonicalizesIt()
+    {
+        Assert.True(_resolver.TryResolve(
+            "arcgis/rest/services/Land/My%20Parcels/FeatureServer/0/query",
+            out var resource));
+
+        Assert.Equal("Land/My Parcels", resource.ServiceName);
+        Assert.Equal(
+            "/arcgis/rest/services/Land/My Parcels/FeatureServer/0/query",
+            resource.CanonicalPath);
+    }
+
     [Theory]
     [InlineData("arcgis/rest/services/../admin")]
     [InlineData("arcgis/rest/services/%2e%2e/admin")]
     [InlineData("arcgis/rest/services/%252e%252e/admin")]
+    [InlineData("arcgis/rest/services/Land%5cAdmin/FeatureServer")]
+    [InlineData("arcgis/rest/services/Land%25Admin/FeatureServer")]
+    [InlineData("arcgis/rest/services/Land%ZZAdmin/FeatureServer")]
     [InlineData("arcgis/rest/services/Land%2fAdmin/FeatureServer")]
     [InlineData("arcgis/rest/services/Land%252fAdmin/FeatureServer")]
     [InlineData("arcgis//rest/services/Land/Parcels/FeatureServer/0/query")]
