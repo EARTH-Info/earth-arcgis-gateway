@@ -33,22 +33,22 @@ public static class GatewayHandler
         if (!operationPolicy.IsAllowed(resource, context.Request.Method))
         { Audit(logger, subject, normalized, context.Request.Method, 403, 0, cid, "operation_denied"); context.Response.StatusCode = 403; return; }
 
+        var tenant = context.User.FindFirstValue("tenant_id") ?? context.User.FindFirstValue("tid");
         var rateCost = rateCostPolicy.GetCost(resource, context.Request.Query);
         var rateDecision = await gatewayRateLimiter.ConsumeAsync(
-            new RateLimitKey(subject, application.Id, resource.ServiceName, resource.LayerId),
+            new RateLimitKey(subject, tenant, application.Id, resource.ServiceName, resource.LayerId, resource.Operation),
             rateCost.Units, context.RequestAborted);
         if (!rateDecision.Allowed)
         {
             context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
             context.Response.Headers.RetryAfter = rateDecision.RetryAfterSeconds.ToString();
-            telemetry.TryWrite(new TelemetryEvent(DateTimeOffset.UtcNow, subject, null, application.Id,
+            telemetry.TryWrite(new TelemetryEvent(DateTimeOffset.UtcNow, subject, tenant, application.Id,
                 resource.ServiceName, resource.ServiceType, resource.LayerId, resource.Operation,
                 context.Request.Method, StatusCodes.Status429TooManyRequests, 0, "THROTTLE",
                 rateDecision.ReasonCode, null, cid));
             return;
         }
 
-        var tenant = context.User.FindFirstValue("tenant_id") ?? context.User.FindFirstValue("tid");
         var accessRequest = new AccessPolicyRequest(
             subject, tenant, application.Id, resource.ServiceName, resource.ServiceType,
             resource.LayerId, resource.Operation, context.Request.Method, cid);
