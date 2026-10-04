@@ -55,8 +55,11 @@ public sealed class AccessPolicyClient(
             if (!response.IsSuccessStatusCode)
                 return Deny("access_api_http_error");
 
+            if (response.Content.Headers.ContentLength is > MaxResponseBytes)
+                return Deny("access_api_response_too_large");
+
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            using var document = await ReadBoundedJsonAsync(stream, cancellationToken);
 
             var root = document.RootElement;
             if (!root.TryGetProperty("decision", out var decisionElement) ||
@@ -92,6 +95,12 @@ public sealed class AccessPolicyClient(
                 request.Application, request.CorrelationId);
             return Deny("access_api_unavailable");
         }
+        catch (AccessPolicyResponseTooLargeException)
+        {
+            logger.LogWarning("access_policy_response_too_large application={Application} correlation_id={CorrelationId}",
+                request.Application, request.CorrelationId);
+            return Deny("access_api_response_too_large");
+        }
         catch (JsonException ex)
         {
             logger.LogWarning(ex, "access_policy_malformed application={Application} correlation_id={CorrelationId}",
@@ -100,6 +109,37 @@ public sealed class AccessPolicyClient(
         }
     }
 
+    private const int MaxResponseBytes = 64 * 1024;
+
+    private static async Task<JsonDocument> ReadBoundedJsonAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+
+        while (true)
+        {
+            var remaining = MaxResponseBytes + 1 - checked((int)buffer.Length);
+            if (remaining <= 0)
+                throw new AccessPolicyResponseTooLargeException();
+
+            var read = await stream.ReadAsync(
+                chunk.AsMemory(0, Math.Min(chunk.Length, remaining)),
+                cancellationToken);
+
+            if (read == 0)
+                break;
+
+            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken);
+            if (buffer.Length > MaxResponseBytes)
+                throw new AccessPolicyResponseTooLargeException();
+        }
+
+        buffer.Position = 0;
+        return await JsonDocument.ParseAsync(buffer, cancellationToken: cancellationToken);
+    }
+
     private static AccessPolicyDecision Deny(string reason, string? version = null) =>
         new(false, reason, version);
+
+    private sealed class AccessPolicyResponseTooLargeException : Exception;
 }
