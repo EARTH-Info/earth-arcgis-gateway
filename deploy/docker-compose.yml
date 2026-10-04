@@ -21,12 +21,12 @@ services:
       Gateway__OAuthClientId: ${ARCGIS_OAUTH_CLIENT_ID}
       Gateway__OAuthClientSecret: ${ARCGIS_OAUTH_CLIENT_SECRET}
       Gateway__AllowedPathPrefixes__0: ${ARCGIS_ALLOWED_PATH_PREFIX}
-      Applications__jtuwma__Audiences__0: ${JTUWMA_AUDIENCE}
-      Applications__jtuwma__ClientIds__0: ${JTUWMA_CLIENT_ID}
-      Applications__jtuwma__AccessApiAuthorizeUrl: ${JTUWMA_ACCESS_API_AUTHORIZE_URL}
-      Applications__geoforest__Audiences__0: ${GEOFOREST_AUDIENCE}
-      Applications__geoforest__ClientIds__0: ${GEOFOREST_CLIENT_ID}
-      Applications__geoforest__AccessApiAuthorizeUrl: ${GEOFOREST_ACCESS_API_AUTHORIZE_URL}
+      Applications__Registrations__jtuwma__Audiences__0: ${JTUWMA_AUDIENCE}
+      Applications__Registrations__jtuwma__ClientIds__0: ${JTUWMA_CLIENT_ID}
+      Applications__Registrations__jtuwma__AccessApiAuthorizeUrl: ${JTUWMA_ACCESS_API_AUTHORIZE_URL}
+      Applications__Registrations__geoforest__Audiences__0: ${GEOFOREST_AUDIENCE}
+      Applications__Registrations__geoforest__ClientIds__0: ${GEOFOREST_CLIENT_ID}
+      Applications__Registrations__geoforest__AccessApiAuthorizeUrl: ${GEOFOREST_ACCESS_API_AUTHORIZE_URL}
       Redis__ConnectionString: redis:6379,abortConnect=false
       Telemetry__ClickHouseBaseUrl: ${CLICKHOUSE_BASE_URL:-}
       Telemetry__Database: ${CLICKHOUSE_DATABASE:-default}
