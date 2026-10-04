@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Earth.ArcGIS.Gateway;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
 
 namespace Earth.ArcGIS.Gateway.Tests;
 
@@ -15,6 +16,33 @@ public sealed class ApplicationIdentityResolverTests
                 ["geoforest"] = new() { Audiences = ["gateway-api"], ClientIds = ["geoforest-web"] }
             }
         }));
+
+
+    [Fact]
+    public void ProductionConfigurationShapeBindsRegistrations()
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Applications:Registrations:jtuwma:Audiences:0"] = "gateway-api",
+            ["Applications:Registrations:jtuwma:ClientIds:0"] = "jtuwma-web",
+            ["Applications:Registrations:jtuwma:AccessApiAuthorizeUrl"] =
+                "https://policy.test/authorize"
+        };
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
+        var options = configuration
+            .GetSection("Applications")
+            .Get<ApplicationOptions>();
+
+        Assert.NotNull(options);
+        Assert.True(options.Registrations.ContainsKey("jtuwma"));
+        Assert.Equal(
+            "https://policy.test/authorize",
+            options.Registrations["jtuwma"].AccessApiAuthorizeUrl);
+    }
 
     [Fact]
     public void Resolves_TrustedClient()
