@@ -36,6 +36,20 @@ builder.Services.AddSingleton<IRateCostPolicy, RateCostPolicy>();
 builder.Services.AddSingleton<IArcGisUpstreamGate>(_ =>
     new ArcGisUpstreamGate(
         builder.Configuration.GetValue("Protection:MaxConcurrentArcGisRequests", 64)));
+builder.Services.AddSingleton<IUserBlockStore, UserBlockStore>();
+builder.Services.AddSingleton<AdminAuditStore>();
+builder.Services.AddSingleton<IConnectionMultiplexerAccessor, ConnectionMultiplexerAccessor>();
+
+var adminOptions = new AdminOptions
+{
+    AllowedSubjects =
+        builder.Configuration.GetSection("Admin:AllowedSubjects").Get<string[]>() ?? Array.Empty<string>(),
+    AllowedRoles =
+        builder.Configuration.GetSection("Admin:AllowedRoles").Get<string[]>() ?? ["gateway-admin"],
+    RecentTelemetryLimit =
+        builder.Configuration.GetValue("Admin:RecentTelemetryLimit", 500)
+};
+builder.Services.AddSingleton(adminOptions);
 
 var rateLimitOptions = new GatewayRateLimitOptions
 {
@@ -161,6 +175,14 @@ builder.Services.AddAuthorization(options =>
         policy.RequireAssertion(context =>
             EarthIdAuthentication.HasStableSubject(context.User));
     });
+
+    options.AddPolicy("gateway-admin", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context =>
+            EarthIdAuthentication.HasStableSubject(context.User) &&
+            AdminAuthorization.IsAuthorized(context.User, adminOptions));
+    });
 });
 
 builder.Services.AddRateLimiter(o =>
@@ -231,6 +253,8 @@ app.MapGet("/health", () => Results.Redirect("/health/ready"));
 app.MapMethods("/arcgis/{**path}", new[] { "GET", "POST" }, GatewayHandler.HandleAsync)
    .RequireAuthorization("earthid-user")
    .RequireRateLimiting("earthid-user");
+
+AdminConsole.MapRoutes(app);
 
 app.Run();
 
