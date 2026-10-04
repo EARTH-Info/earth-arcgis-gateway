@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Claims;
 
 namespace Earth.ArcGIS.Gateway;
 
@@ -7,6 +8,26 @@ public sealed class AdminOptions
     public string[] AllowedSubjects { get; set; } = Array.Empty<string>();
     public string[] AllowedRoles { get; set; } = ["gateway-admin"];
     public int RecentTelemetryLimit { get; set; } = 500;
+}
+
+public static class AdminAuthorization
+{
+    public static bool IsAuthorized(ClaimsPrincipal principal, AdminOptions options)
+    {
+        var subject = principal.FindFirstValue("sub");
+        if (!string.IsNullOrWhiteSpace(subject) &&
+            options.AllowedSubjects.Contains(subject, StringComparer.Ordinal))
+            return true;
+
+        var roles = principal.FindAll("role")
+            .Concat(principal.FindAll("roles"))
+            .SelectMany(claim => claim.Value.Split(
+                [' ', ','],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        return roles.Any(role =>
+            options.AllowedRoles.Contains(role, StringComparer.OrdinalIgnoreCase));
+    }
 }
 
 public sealed record UserBlock(
