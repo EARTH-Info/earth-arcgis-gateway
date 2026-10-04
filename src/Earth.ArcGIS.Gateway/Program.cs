@@ -135,21 +135,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         o.Audience = audience;
         o.RequireHttpsMetadata = true;
         o.MapInboundClaims = false;
-        o.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ClockSkew = TimeSpan.FromMinutes(1)
-        };
+        o.TokenValidationParameters =
+            EarthIdAuthentication.CreateValidationParameters(audience);
     });
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("earthid-user", policy =>
     {
         policy.RequireAuthenticatedUser();
-        policy.RequireClaim("sub");
+        policy.RequireAssertion(context =>
+            EarthIdAuthentication.HasStableSubject(context.User));
     });
 });
 
