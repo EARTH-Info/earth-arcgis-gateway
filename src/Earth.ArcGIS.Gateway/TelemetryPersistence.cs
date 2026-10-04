@@ -150,6 +150,7 @@ public sealed class FileTelemetrySpool(
             return;
 
         await gate.WaitAsync(cancellationToken);
+        string? tempPath = null;
         try
         {
             Directory.CreateDirectory(cfg.SpoolDirectory);
@@ -158,7 +159,7 @@ public sealed class FileTelemetrySpool(
             var finalPath = Path.Combine(
                 cfg.SpoolDirectory,
                 $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}.jsonl");
-            var tempPath = finalPath + ".tmp";
+            tempPath = finalPath + ".tmp";
 
             await using (var stream = new FileStream(
                 tempPath,
@@ -176,10 +177,26 @@ public sealed class FileTelemetrySpool(
             }
 
             File.Move(tempPath, finalPath);
+            tempPath = null;
             health.MarkSpooled();
         }
         finally
         {
+            if (tempPath is not null && File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(
+                        ex,
+                        "telemetry_spool_temp_cleanup_failed file={File}",
+                        Path.GetFileName(tempPath));
+                }
+            }
+
             gate.Release();
         }
     }
