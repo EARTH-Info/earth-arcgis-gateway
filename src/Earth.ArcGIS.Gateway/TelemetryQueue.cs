@@ -22,7 +22,7 @@ public sealed class TelemetryQueue : ITelemetryQueue
         {
             SingleReader = true,
             SingleWriter = false,
-            FullMode = BoundedChannelFullMode.DropWrite,
+            FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false
         });
     }
