@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Earth.ArcGIS.Gateway;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.Options;
@@ -11,6 +12,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {
+    serverOptions.Limits.MaxConcurrentConnections =
+        builder.Configuration.GetValue<long?>("Protection:MaxConcurrentConnections", 1024);
     serverOptions.Limits.MaxRequestBodySize =
         builder.Configuration.GetValue<long>("Protection:MaxRequestBodyBytes", 2 * 1024 * 1024);
     serverOptions.Limits.MaxRequestHeadersTotalSize =
@@ -19,6 +22,22 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
         builder.Configuration.GetValue("Protection:MaxRequestHeaderCount", 64);
     serverOptions.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(
         builder.Configuration.GetValue("Protection:RequestHeadersTimeoutSeconds", 10));
+});
+
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor |
+        ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+
+    foreach (var configuredProxy in
+             builder.Configuration.GetSection("Protection:TrustedProxies").Get<string[]>()
+             ?? Array.Empty<string>())
+    {
+        if (System.Net.IPAddress.TryParse(configuredProxy, out var address))
+            options.KnownProxies.Add(address);
+    }
 });
 
 builder.Services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidator>();
@@ -186,28 +205,41 @@ builder.Services.AddAuthorization(options =>
     });
 });
 
-builder.Services.AddRateLimiter(o =>
+builder.Services.AddRateLimiter(options =>
 {
-    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    o.AddPolicy("earthid-user", context =>
-    {
-        var subject = context.User.FindFirstValue("sub") ?? "anonymous";
-        return RateLimitPartition.GetTokenBucketLimiter(subject, _ => new TokenBucketRateLimiterOptions
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    var tokenLimit =
+        builder.Configuration.GetValue("Protection:PreAuthSourceTokenLimit", 300);
+    var tokensPerPeriod =
+        builder.Configuration.GetValue("Protection:PreAuthSourceTokensPerMinute", 300);
+
+    options.GlobalLimiter =
+        PartitionedRateLimiter.Create<HttpContext, string>(context =>
         {
-            TokenLimit = 120,
-            TokensPerPeriod = 120,
-            ReplenishmentPeriod = TimeSpan.FromMinutes(1),
-            AutoReplenishment = true,
-            QueueLimit = 0
+            var source =
+                context.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown";
+
+            return RateLimitPartition.GetTokenBucketLimiter(
+                source,
+                _ => new TokenBucketRateLimiterOptions
+                {
+                    TokenLimit = tokenLimit,
+                    TokensPerPeriod = tokensPerPeriod,
+                    ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                    AutoReplenishment = true,
+                    QueueLimit = 0
+                });
         });
-    });
 });
 
 var app = builder.Build();
+app.UseForwardedHeaders();
 app.UseHttpsRedirection();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseRateLimiter();
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 
@@ -252,8 +284,7 @@ app.MapGet("/health/ready", (
 app.MapGet("/health", () => Results.Redirect("/health/ready"));
 
 app.MapMethods("/arcgis/{**path}", new[] { "GET", "POST" }, GatewayHandler.HandleAsync)
-   .RequireAuthorization("earthid-user")
-   .RequireRateLimiting("earthid-user");
+   .RequireAuthorization("earthid-user");
 
 AdminConsole.MapRoutes(app);
 
