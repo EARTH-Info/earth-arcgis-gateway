@@ -103,6 +103,33 @@ public sealed class GatewayHandlerTests
     }
 
     [Fact]
+    public async Task ActiveUserBlockRejectsBeforeAllGatewayDependencies()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var blocks = new UserBlockStore();
+        blocks.Block("sub-1", "abuse", "admin-sub", TimeSpan.FromMinutes(10));
+        var context = CreateContext("GET");
+
+        await HandleAsync(
+            context,
+            upstream,
+            credentials,
+            access,
+            rate,
+            userBlocks: blocks);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
     public async Task PrefixComparisonRequiresPathBoundary()
     {
         var upstream = new RecordingHandler();
@@ -133,7 +160,8 @@ public sealed class GatewayHandlerTests
         FakeCredentialProvider credentials,
         FakeAccessPolicyClient access,
         FakeRateLimiter rate,
-        string allowedPrefix = "/arcgis/rest/services/Land/Parcels")
+        string allowedPrefix = "/arcgis/rest/services/Land/Parcels",
+        IUserBlockStore? userBlocks = null)
     {
         var http = new HttpClient(upstream);
         using var upstreamGate = new ArcGisUpstreamGate(64);
@@ -153,6 +181,7 @@ public sealed class GatewayHandlerTests
             new RateCostPolicy(),
             rate,
             upstreamGate,
+            userBlocks ?? new UserBlockStore(),
             access,
             new TelemetryQueue(),
             NullLoggerFactory.Instance);
