@@ -27,6 +27,22 @@ public sealed class ArcGisTokenProviderTests
     }
 
     [Fact]
+    public async Task TokenInsideRefreshSkewIsProactivelyRefreshed()
+    {
+        var expires = DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds();
+        var handler = new StubHandler(expires);
+        var provider = Create(handler);
+
+        Assert.Equal("server-1", await provider.GetTokenAsync(
+            TestContext.Current.CancellationToken));
+        Assert.Equal("server-2", await provider.GetTokenAsync(
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(2, handler.PortalRequests);
+        Assert.Equal(2, handler.ServerExchangeRequests);
+    }
+
+    [Fact]
     public async Task ExchangeUsesExactConfiguredFederatedServerUrl()
     {
         var expires = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds();
