@@ -36,7 +36,6 @@ builder.Services.AddSingleton<IRateCostPolicy, RateCostPolicy>();
 builder.Services.AddSingleton<IArcGisUpstreamGate>(_ =>
     new ArcGisUpstreamGate(
         builder.Configuration.GetValue("Protection:MaxConcurrentArcGisRequests", 64)));
-builder.Services.AddSingleton<IUserBlockStore, UserBlockStore>();
 builder.Services.AddSingleton<AdminAuditStore>();
 builder.Services.AddSingleton<IConnectionMultiplexerAccessor, ConnectionMultiplexerAccessor>();
 
@@ -67,6 +66,7 @@ var redisConnection = builder.Configuration["Redis:ConnectionString"];
 if (string.IsNullOrWhiteSpace(redisConnection))
 {
     builder.Services.AddSingleton<IGatewayRateLimiter, InMemoryGatewayRateLimiter>();
+    builder.Services.AddSingleton<IUserBlockStore, UserBlockStore>();
 }
 else
 {
@@ -82,6 +82,7 @@ else
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
         ConnectionMultiplexer.Connect(redisConfiguration));
     builder.Services.AddSingleton<IGatewayRateLimiter, RedisGatewayRateLimiter>();
+    builder.Services.AddSingleton<IUserBlockStore, RedisUserBlockStore>();
 }
 builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2))
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
