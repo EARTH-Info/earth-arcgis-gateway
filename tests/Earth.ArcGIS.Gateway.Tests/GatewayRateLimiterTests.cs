@@ -8,7 +8,7 @@ public sealed class GatewayRateLimiterTests
     public async Task WeightedUnitsAreConsumed()
     {
         var limiter = new InMemoryGatewayRateLimiter();
-        var key = new RateLimitKey("sub-1", "jtuwma", "Land/Parcels", 0);
+        var key = new RateLimitKey("sub-1", "tenant-1", "jtuwma", "Land/Parcels", 0, "query");
 
         var first = await limiter.ConsumeAsync(key, 5, CancellationToken.None);
         var second = await limiter.ConsumeAsync(key, 5, CancellationToken.None);
@@ -22,7 +22,7 @@ public sealed class GatewayRateLimiterTests
     public async Task ExhaustedBudgetReturns429CompatibleDecision()
     {
         var limiter = new InMemoryGatewayRateLimiter();
-        var key = new RateLimitKey("sub-1", "jtuwma", "Land/Parcels", 0);
+        var key = new RateLimitKey("sub-1", "tenant-1", "jtuwma", "Land/Parcels", 0, "query");
 
         for (var i = 0; i < 48; i++)
             Assert.True((await limiter.ConsumeAsync(key, 5, CancellationToken.None)).Allowed);
@@ -38,11 +38,22 @@ public sealed class GatewayRateLimiterTests
         var limiter = new InMemoryGatewayRateLimiter();
         var resource = ("jtuwma", "Land/Parcels", (int?)0);
 
-        var a = new RateLimitKey("sub-a", resource.Item1, resource.Item2, resource.Item3);
-        var b = new RateLimitKey("sub-b", resource.Item1, resource.Item2, resource.Item3);
+        var a = new RateLimitKey("sub-a", "tenant-1", resource.Item1, resource.Item2, resource.Item3, "query");
+        var b = new RateLimitKey("sub-b", "tenant-1", resource.Item1, resource.Item2, resource.Item3, "query");
 
         Assert.True((await limiter.ConsumeAsync(a, 240, CancellationToken.None)).Allowed);
         Assert.False((await limiter.ConsumeAsync(a, 1, CancellationToken.None)).Allowed);
         Assert.True((await limiter.ConsumeAsync(b, 1, CancellationToken.None)).Allowed);
+    }
+    [Fact]
+    public async Task DifferentOperationsHaveIndependentBudgets()
+    {
+        var limiter = new InMemoryGatewayRateLimiter();
+        var query = new RateLimitKey("sub-1", "tenant-1", "jtuwma", "Land/Parcels", 0, "query");
+        var metadata = new RateLimitKey("sub-1", "tenant-1", "jtuwma", "Land/Parcels", 0, "metadata");
+
+        Assert.True((await limiter.ConsumeAsync(query, 240, CancellationToken.None)).Allowed);
+        Assert.False((await limiter.ConsumeAsync(query, 1, CancellationToken.None)).Allowed);
+        Assert.True((await limiter.ConsumeAsync(metadata, 1, CancellationToken.None)).Allowed);
     }
 }
