@@ -8,13 +8,6 @@ namespace Earth.ArcGIS.Gateway;
 
 public static class GatewayHandler
 {
-    private static readonly HashSet<string> BlockedOperations = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "applyEdits", "addFeatures", "updateFeatures", "deleteFeatures",
-        "calculate", "append", "truncate", "upload", "deleteFromDefinition",
-        "addToDefinition", "updateDefinition"
-    };
-
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
         ArcGisTokenProvider tokens, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
         IArcGisResourceResolver resources, IArcGisOperationPolicy operationPolicy, IRateCostPolicy rateCostPolicy,
