@@ -110,7 +110,10 @@ public sealed class ArcGisTokenProvider(
         response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        using var doc = await ParseJsonAsync(
+            stream,
+            $"ArcGIS {kind} token response is not valid JSON.",
+            ct);
 
         if (doc.RootElement.TryGetProperty("error", out _))
             throw new InvalidOperationException($"ArcGIS {kind} token request returned an error.");
@@ -127,6 +130,23 @@ public sealed class ArcGisTokenProvider(
         return new TokenState(
             tokenElement.GetString()!,
             DateTimeOffset.FromUnixTimeMilliseconds(expiresMs));
+    }
+
+    private static async Task<JsonDocument> ParseJsonAsync(
+        Stream stream,
+        string errorMessage,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await JsonDocument.ParseAsync(
+                stream,
+                cancellationToken: cancellationToken);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(errorMessage, ex);
+        }
     }
 
     private static bool TryReadEpochMilliseconds(JsonElement element, out long value)
