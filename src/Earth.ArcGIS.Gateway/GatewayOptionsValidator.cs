@@ -12,11 +12,10 @@ public sealed class GatewayOptionsValidator : IValidateOptions<GatewayOptions>
             errors.Add("Gateway:ArcGisBaseUrl must be an HTTPS origin with no path, query, fragment, or user-info.");
 
         if (options.AllowedPathPrefixes.Length == 0 ||
-            options.AllowedPathPrefixes.Any(p =>
-                string.IsNullOrWhiteSpace(p) ||
-                !p.StartsWith("/arcgis/rest/services/", StringComparison.OrdinalIgnoreCase)))
+            options.AllowedPathPrefixes.Any(p => !IsSafeAllowedPrefix(p)))
         {
-            errors.Add("Gateway:AllowedPathPrefixes must contain explicit /arcgis/rest/services/... prefixes.");
+            errors.Add(
+                "Gateway:AllowedPathPrefixes must contain canonical, explicit /arcgis/rest/services/... prefixes.");
         }
 
         if (options.RefreshSkewSeconds < 30)
@@ -62,6 +61,25 @@ public sealed class GatewayOptionsValidator : IValidateOptions<GatewayOptions>
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);
+    }
+
+    private static bool IsSafeAllowedPrefix(string value)
+    {
+        const string root = "/arcgis/rest/services/";
+        if (string.IsNullOrWhiteSpace(value) ||
+            !value.StartsWith(root, StringComparison.OrdinalIgnoreCase) ||
+            value.Length <= root.Length)
+            return false;
+
+        var normalized = value.TrimEnd('/');
+        return normalized.Length > root.TrimEnd('/').Length &&
+               !normalized.Contains("..", StringComparison.Ordinal) &&
+               !normalized.Contains('\\') &&
+               !normalized.Contains("//", StringComparison.Ordinal) &&
+               !normalized.Contains('%') &&
+               !normalized.Contains('?') &&
+               !normalized.Contains('#') &&
+               !normalized.Contains(':');
     }
 
     private static bool IsHttpsAbsolute(string value) =>
