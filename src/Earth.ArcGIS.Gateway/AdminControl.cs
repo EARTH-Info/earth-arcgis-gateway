@@ -68,10 +68,23 @@ public sealed record AdminEnforcementEvent(
 
 public interface IUserBlockStore
 {
-    bool TryGetActive(string earthIdSub, out UserBlock block);
-    UserBlock Block(string earthIdSub, string reason, string adminSubject, TimeSpan? duration);
-    bool Unblock(string earthIdSub);
-    IReadOnlyList<UserBlock> GetActive();
+    ValueTask<UserBlock?> GetActiveAsync(
+        string earthIdSub,
+        CancellationToken cancellationToken);
+
+    ValueTask<UserBlock> BlockAsync(
+        string earthIdSub,
+        string reason,
+        string adminSubject,
+        TimeSpan? duration,
+        CancellationToken cancellationToken);
+
+    ValueTask<bool> UnblockAsync(
+        string earthIdSub,
+        CancellationToken cancellationToken);
+
+    ValueTask<IReadOnlyList<UserBlock>> GetActiveAsync(
+        CancellationToken cancellationToken);
 }
 
 public sealed class UserBlockStore : IUserBlockStore
@@ -79,52 +92,54 @@ public sealed class UserBlockStore : IUserBlockStore
     private readonly ConcurrentDictionary<string, UserBlock> blocks =
         new(StringComparer.Ordinal);
 
-    public bool TryGetActive(string earthIdSub, out UserBlock block)
+    public ValueTask<UserBlock?> GetActiveAsync(
+        string earthIdSub,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (blocks.TryGetValue(earthIdSub, out var current))
         {
             if (current.IsActive(DateTimeOffset.UtcNow))
-            {
-                block = current;
-                return true;
-            }
+                return ValueTask.FromResult<UserBlock?>(current);
 
             blocks.TryRemove(earthIdSub, out _);
         }
 
-        block = null!;
-        return false;
+        return ValueTask.FromResult<UserBlock?>(null);
     }
 
-    public UserBlock Block(
+    public ValueTask<UserBlock> BlockAsync(
         string earthIdSub,
         string reason,
         string adminSubject,
-        TimeSpan? duration)
+        TimeSpan? duration,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(earthIdSub))
-            throw new ArgumentException("EarthID subject is required.", nameof(earthIdSub));
+        cancellationToken.ThrowIfCancellationRequested();
 
-        if (string.IsNullOrWhiteSpace(reason))
-            throw new ArgumentException("Block reason is required.", nameof(reason));
-
-        var now = DateTimeOffset.UtcNow;
-        var block = new UserBlock(
-            earthIdSub.Trim(),
-            reason.Trim(),
+        var block = CreateBlock(
+            earthIdSub,
+            reason,
             adminSubject,
-            now,
-            duration is null ? null : now.Add(duration.Value));
+            duration);
 
         blocks[block.EarthIdSub] = block;
-        return block;
+        return ValueTask.FromResult(block);
     }
 
-    public bool Unblock(string earthIdSub) =>
-        blocks.TryRemove(earthIdSub, out _);
-
-    public IReadOnlyList<UserBlock> GetActive()
+    public ValueTask<bool> UnblockAsync(
+        string earthIdSub,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(blocks.TryRemove(earthIdSub, out _));
+    }
+
+    public ValueTask<IReadOnlyList<UserBlock>> GetActiveAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var now = DateTimeOffset.UtcNow;
 
         foreach (var pair in blocks)
@@ -133,9 +148,45 @@ public sealed class UserBlockStore : IUserBlockStore
                 blocks.TryRemove(pair.Key, out _);
         }
 
-        return blocks.Values
-            .OrderByDescending(x => x.CreatedAt)
-            .ToArray();
+        return ValueTask.FromResult<IReadOnlyList<UserBlock>>(
+            blocks.Values
+                .OrderByDescending(x => x.CreatedAt)
+                .ToArray());
+    }
+
+    internal static UserBlock CreateBlock(
+        string earthIdSub,
+        string reason,
+        string adminSubject,
+        TimeSpan? duration)
+    {
+        if (string.IsNullOrWhiteSpace(earthIdSub))
+            throw new ArgumentException(
+                "EarthID subject is required.",
+                nameof(earthIdSub));
+
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException(
+                "Block reason is required.",
+                nameof(reason));
+
+        if (string.IsNullOrWhiteSpace(adminSubject))
+            throw new ArgumentException(
+                "Admin subject is required.",
+                nameof(adminSubject));
+
+        if (duration is <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(duration),
+                "Block duration must be positive when supplied.");
+
+        var now = DateTimeOffset.UtcNow;
+        return new UserBlock(
+            earthIdSub.Trim(),
+            reason.Trim(),
+            adminSubject.Trim(),
+            now,
+            duration is null ? null : now.Add(duration.Value));
     }
 }
 
