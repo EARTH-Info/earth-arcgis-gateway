@@ -87,6 +87,16 @@ public sealed class ArcGisTokenProvider(
 
     private async Task<TokenState> ExchangeAsync(string portal, CancellationToken ct)
     {
+        if (!Uri.TryCreate(cfg.FederatedServerUrl, UriKind.Absolute, out var serverUri) ||
+            serverUri.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrEmpty(serverUri.UserInfo) ||
+            !string.IsNullOrEmpty(serverUri.Query) ||
+            !string.IsNullOrEmpty(serverUri.Fragment))
+        {
+            throw new InvalidOperationException(
+                "ArcGIS federated serverUrl must be an absolute HTTPS URL without user-info, query, or fragment.");
+        }
+
         using var form = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["token"] = portal,
