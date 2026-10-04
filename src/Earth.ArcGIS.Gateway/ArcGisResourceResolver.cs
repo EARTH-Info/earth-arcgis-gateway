@@ -32,7 +32,7 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
         resource = null!;
 
         if (string.IsNullOrWhiteSpace(rawPath) ||
-            rawPath.Contains('\') ||
+            rawPath.Contains('\\') ||
             rawPath.Contains("..", StringComparison.Ordinal) ||
             rawPath.Contains("//", StringComparison.Ordinal))
             return false;
@@ -49,7 +49,7 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
 
         if (!string.Equals(decoded, rawPath, StringComparison.Ordinal) ||
             decoded.Contains("..", StringComparison.Ordinal) ||
-            decoded.Contains('\') ||
+            decoded.Contains('\\') ||
             decoded.Contains("//", StringComparison.Ordinal))
             return false;
 
