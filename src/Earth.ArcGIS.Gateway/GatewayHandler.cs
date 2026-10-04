@@ -15,7 +15,7 @@ public static class GatewayHandler
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
         IArcGisCredentialProvider credentials, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
         IArcGisResourceResolver resources, IArcGisOperationPolicy operationPolicy, IRateCostPolicy rateCostPolicy,
-        IGatewayRateLimiter gatewayRateLimiter, IAccessPolicyClient accessPolicy,
+        IGatewayRateLimiter gatewayRateLimiter, IArcGisUpstreamGate upstreamGate, IAccessPolicyClient accessPolicy,
         ITelemetryQueue telemetry, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("ArcGisAudit");
@@ -99,6 +99,19 @@ public static class GatewayHandler
             Deny(context, telemetry, logger, subject, tenant, application.Id, resource,
                 StatusCodes.Status503ServiceUnavailable, "upstream_configuration_invalid", cid, normalized,
                 accessDecision.PolicyVersion);
+            return;
+        }
+
+        using var upstreamLease = await upstreamGate.TryEnterAsync(context.RequestAborted);
+        if (upstreamLease is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.Headers.RetryAfter = "1";
+            RecordTelemetry(telemetry, subject, tenant, application.Id, resource,
+                context.Request.Method, StatusCodes.Status503ServiceUnavailable, 0,
+                "THROTTLE", "upstream_concurrency_exhausted", accessDecision.PolicyVersion, cid);
+            Audit(logger, subject, normalized, context.Request.Method,
+                StatusCodes.Status503ServiceUnavailable, 0, cid, "upstream_concurrency_exhausted");
             return;
         }
 
