@@ -6,6 +6,8 @@ public interface ITelemetryQueue
 {
     bool TryWrite(TelemetryEvent item);
     IAsyncEnumerable<TelemetryEvent> ReadAllAsync(CancellationToken cancellationToken);
+    ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken);
+    bool TryRead(out TelemetryEvent? item);
     long Accepted { get; }
     long Dropped { get; }
 }
@@ -43,4 +45,10 @@ public sealed class TelemetryQueue : ITelemetryQueue
 
     public IAsyncEnumerable<TelemetryEvent> ReadAllAsync(CancellationToken cancellationToken) =>
         _channel.Reader.ReadAllAsync(cancellationToken);
+
+    public ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken) =>
+        _channel.Reader.WaitToReadAsync(cancellationToken);
+
+    public bool TryRead(out TelemetryEvent? item) =>
+        _channel.Reader.TryRead(out item);
 }
