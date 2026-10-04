@@ -93,7 +93,11 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/health", (ITelemetryQueue telemetry) => Results.Ok(new
+{
+    status = "ok",
+    telemetry = new { accepted = telemetry.Accepted, dropped = telemetry.Dropped }
+}));
 
 app.MapMethods("/arcgis/{**path}", new[] { "GET", "POST" }, GatewayHandler.HandleAsync)
    .RequireAuthorization("earthid-user")
