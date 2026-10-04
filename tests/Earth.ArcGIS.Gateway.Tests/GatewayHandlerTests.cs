@@ -134,6 +134,60 @@ public sealed class GatewayHandlerTests
         Assert.Empty(upstream.Requests);
     }
 
+
+    [Fact]
+    public async Task RateBackendFailureReturns503WithoutAccessOrArcGis()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter(
+            new RateLimitDecision(
+                false,
+                0,
+                1,
+                "rate_backend_unavailable"));
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(
+            StatusCodes.Status503ServiceUnavailable,
+            context.Response.StatusCode);
+        Assert.Equal(1, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task BlockStoreFailureReturns503BeforeOtherDependencies()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(
+            context,
+            upstream,
+            credentials,
+            access,
+            rate,
+            userBlocks: new ThrowingBlockStore());
+
+        Assert.Equal(
+            StatusCodes.Status503ServiceUnavailable,
+            context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
     [Fact]
     public async Task PrefixComparisonRequiresPathBoundary()
     {
@@ -234,8 +288,16 @@ public sealed class GatewayHandlerTests
         }
     }
 
-    private sealed class FakeRateLimiter : IGatewayRateLimiter
+    private sealed class FakeRateLimiter(
+        RateLimitDecision? decision = null) : IGatewayRateLimiter
     {
+        private readonly RateLimitDecision result =
+            decision ?? new RateLimitDecision(
+                true,
+                100,
+                0,
+                "rate_allow");
+
         public int Calls { get; private set; }
 
         public ValueTask<RateLimitDecision> ConsumeAsync(
@@ -244,9 +306,33 @@ public sealed class GatewayHandlerTests
             CancellationToken cancellationToken)
         {
             Calls++;
-            return ValueTask.FromResult(
-                new RateLimitDecision(true, 100, 0, "rate_allow"));
+            return ValueTask.FromResult(result);
         }
+    }
+
+    private sealed class ThrowingBlockStore : IUserBlockStore
+    {
+        public ValueTask<UserBlock?> GetActiveAsync(
+            string earthIdSub,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Redis unavailable.");
+
+        public ValueTask<UserBlock> BlockAsync(
+            string earthIdSub,
+            string reason,
+            string adminSubject,
+            TimeSpan? duration,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+
+        public ValueTask<bool> UnblockAsync(
+            string earthIdSub,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+
+        public ValueTask<IReadOnlyList<UserBlock>> GetActiveAsync(
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
     }
 
     private sealed class FakeAccessPolicyClient(AccessPolicyDecision decision)
