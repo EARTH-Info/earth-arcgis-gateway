@@ -100,7 +100,9 @@ public sealed class ArcGisTokenProvider(
     private async Task<TokenState> RequestAsync(HttpContent form, string kind, CancellationToken ct)
     {
         if (!Uri.TryCreate(cfg.PortalTokenEndpoint, UriKind.Absolute, out var endpoint) ||
-            endpoint.Scheme != Uri.UriSchemeHttps)
+            endpoint.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrEmpty(endpoint.UserInfo) ||
+            !string.IsNullOrEmpty(endpoint.Fragment))
         {
             throw new InvalidOperationException("ArcGIS portal token endpoint must be an absolute HTTPS URL.");
         }
