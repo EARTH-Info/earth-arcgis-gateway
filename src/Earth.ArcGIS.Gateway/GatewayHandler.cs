@@ -24,9 +24,31 @@ public static class GatewayHandler
         var tenant = context.User.FindFirstValue("tenant_id") ?? context.User.FindFirstValue("tid");
         var cid = context.TraceIdentifier;
 
-        var activeBlock = await userBlocks.GetActiveAsync(
-            subject,
-            context.RequestAborted);
+        UserBlock? activeBlock;
+        try
+        {
+            activeBlock = await userBlocks.GetActiveAsync(
+                subject,
+                context.RequestAborted);
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "user_block_store_unavailable earthid_sub={EarthIdSub} correlation_id={CorrelationId}",
+                subject,
+                cid);
+            Deny(context, telemetry, logger, subject, tenant, "unknown", null,
+                StatusCodes.Status503ServiceUnavailable,
+                "block_store_unavailable",
+                cid,
+                "blocked-check");
+            return;
+        }
 
         if (activeBlock is not null)
         {
@@ -85,14 +107,43 @@ public static class GatewayHandler
 
         if (!rateDecision.Allowed)
         {
-            context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-            context.Response.Headers.RetryAfter = Math.Max(1, rateDecision.RetryAfterSeconds).ToString();
-            RecordTelemetry(telemetry, subject, tenant, application.Id, resource,
-                context.Request.Method, StatusCodes.Status429TooManyRequests, 0,
-                "THROTTLE", rateDecision.ReasonCode, null, cid,
+            var backendUnavailable =
+                rateDecision.ReasonCode is
+                    "rate_backend_unavailable" or
+                    "rate_backend_malformed";
+
+            var status = backendUnavailable
+                ? StatusCodes.Status503ServiceUnavailable
+                : StatusCodes.Status429TooManyRequests;
+
+            context.Response.StatusCode = status;
+            context.Response.Headers.RetryAfter =
+                Math.Max(1, rateDecision.RetryAfterSeconds).ToString();
+
+            RecordTelemetry(
+                telemetry,
+                subject,
+                tenant,
+                application.Id,
+                resource,
+                context.Request.Method,
+                status,
+                0,
+                backendUnavailable ? "DENY" : "THROTTLE",
+                rateDecision.ReasonCode,
+                null,
+                cid,
                 rateLimitRemaining: rateDecision.RemainingUnits);
-            Audit(logger, subject, normalized, context.Request.Method,
-                StatusCodes.Status429TooManyRequests, 0, cid, rateDecision.ReasonCode);
+
+            Audit(
+                logger,
+                subject,
+                normalized,
+                context.Request.Method,
+                status,
+                0,
+                cid,
+                rateDecision.ReasonCode);
             return;
         }
 
