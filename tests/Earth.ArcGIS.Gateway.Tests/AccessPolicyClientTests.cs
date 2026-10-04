@@ -91,13 +91,52 @@ public sealed class AccessPolicyClientTests
         Assert.Equal("access_api_response_too_large", result.ReasonCode);
     }
 
+
+    [Fact]
+    public async Task NetworkFailure_FailsClosed()
+    {
+        var client = Create(new ThrowingHandler());
+
+        var result = await client.AuthorizeAsync(
+            App(),
+            Request(),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("access_api_unavailable", result.ReasonCode);
+    }
+
+    [Fact]
+    public async Task HttpClientTimeout_FailsClosed()
+    {
+        var client = Create(
+            new SlowHandler(),
+            TimeSpan.FromMilliseconds(50));
+
+        var result = await client.AuthorizeAsync(
+            App(),
+            Request(),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("access_api_timeout", result.ReasonCode);
+    }
+
     private static AccessPolicyClient Create(HttpStatusCode status, string body) =>
         Create(new StubHandler(status, body));
 
-    private static AccessPolicyClient Create(StubHandler handler)
+    private static AccessPolicyClient Create(
+        HttpMessageHandler handler,
+        TimeSpan? timeout = null)
     {
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://policy.test/authorize") };
-        return new AccessPolicyClient(new StubFactory(http), NullLogger<AccessPolicyClient>.Instance);
+        var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://policy.test/authorize"),
+            Timeout = timeout ?? TimeSpan.FromSeconds(2)
+        };
+        return new AccessPolicyClient(
+            new StubFactory(http),
+            NullLogger<AccessPolicyClient>.Instance);
     }
 
     private static GatewayApplication App() => new("jtuwma", "https://policy.test/authorize");
@@ -107,6 +146,34 @@ public sealed class AccessPolicyClientTests
     private sealed class StubFactory(HttpClient client) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => client;
+    }
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            throw new HttpRequestException("Access API unavailable.");
+    }
+
+    private sealed class SlowHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await Task.Delay(
+                TimeSpan.FromSeconds(5),
+                cancellationToken);
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"decision":"ALLOW"}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
     }
 
     private sealed class StubHandler(HttpStatusCode status, string body) : HttpMessageHandler
