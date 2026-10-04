@@ -256,7 +256,6 @@ app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", (
     ITelemetryQueue telemetry,
     TelemetryPersistenceHealth persistence,
-    FileTelemetrySpool spool,
     IServiceProvider services) =>
 {
     var redis = services.GetService<IConnectionMultiplexer>();
