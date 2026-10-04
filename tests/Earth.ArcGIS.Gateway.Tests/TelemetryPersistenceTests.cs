@@ -46,7 +46,7 @@ public sealed class TelemetryPersistenceTests
             var spool = CreateSpool(directory, health, maxFiles: 1);
 
             await spool.AppendAsync([Event("cid-1")], CancellationToken.None);
-            await Task.Delay(5);
+            await Task.Delay(5, TestContext.Current.CancellationToken);
             await spool.AppendAsync([Event("cid-2")], CancellationToken.None);
 
             Assert.Equal(1, spool.CountPendingFiles());
