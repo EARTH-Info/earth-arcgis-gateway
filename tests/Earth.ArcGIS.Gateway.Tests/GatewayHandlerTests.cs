@@ -29,7 +29,7 @@ public sealed class GatewayHandlerTests
         Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
         Assert.Equal(1, access.Calls);
         Assert.Equal(0, credentials.GetCalls);
-        Assert.Equal(0, upstream.Requests.Count);
+        Assert.Empty(upstream.Requests);
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public sealed class GatewayHandlerTests
         Assert.Equal(0, rate.Calls);
         Assert.Equal(0, access.Calls);
         Assert.Equal(0, credentials.GetCalls);
-        Assert.Equal(0, upstream.Requests.Count);
+        Assert.Empty(upstream.Requests);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public sealed class GatewayHandlerTests
 
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body);
-        Assert.Equal("""{"features":[]}""", await reader.ReadToEndAsync());
+        Assert.Equal("""{"features":[]}""", await reader.ReadToEndAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public sealed class GatewayHandlerTests
         Assert.Equal(0, rate.Calls);
         Assert.Equal(0, access.Calls);
         Assert.Equal(0, credentials.GetCalls);
-        Assert.Equal(0, upstream.Requests.Count);
+        Assert.Empty(upstream.Requests);
     }
 
     private static async Task HandleAsync(
