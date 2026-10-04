@@ -451,7 +451,9 @@ public static class GatewayHandler
         try
         {
             using var doc = JsonDocument.Parse(result.Prefix);
-            if (!doc.RootElement.TryGetProperty("error", out var error) ||
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                !doc.RootElement.TryGetProperty("error", out var error) ||
+                error.ValueKind != JsonValueKind.Object ||
                 !error.TryGetProperty("code", out var code))
                 return false;
 
@@ -565,6 +567,7 @@ public static class GatewayHandler
             CopyHeader(_response.Content.Headers, response, "Last-Modified");
             CopyHeader(_response.Content.Headers, response, "Expires");
             CopyHeader(_response.Content.Headers, response, "Content-Disposition");
+            CopyHeader(_response.Content.Headers, response, "Content-Range");
         }
 
         private static void CopyHeader(
