@@ -15,14 +15,24 @@ public static class GatewayHandler
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
         IArcGisCredentialProvider credentials, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
         IArcGisResourceResolver resources, IArcGisOperationPolicy operationPolicy, IRateCostPolicy rateCostPolicy,
-        IGatewayRateLimiter gatewayRateLimiter, IArcGisUpstreamGate upstreamGate, IAccessPolicyClient accessPolicy,
-        ITelemetryQueue telemetry, ILoggerFactory loggerFactory)
+        IGatewayRateLimiter gatewayRateLimiter, IArcGisUpstreamGate upstreamGate, IUserBlockStore userBlocks,
+        IAccessPolicyClient accessPolicy, ITelemetryQueue telemetry, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("ArcGisAudit");
         var cfg = options.Value;
         var subject = context.User.FindFirstValue("sub") ?? "unknown";
         var tenant = context.User.FindFirstValue("tenant_id") ?? context.User.FindFirstValue("tid");
         var cid = context.TraceIdentifier;
+
+        if (userBlocks.TryGetActive(subject, out var activeBlock))
+        {
+            Deny(context, telemetry, logger, subject, tenant, "unknown", null,
+                StatusCodes.Status403Forbidden, "user_blocked", cid, "blocked");
+            logger.LogWarning(
+                "arcgis_user_blocked earthid_sub={EarthIdSub} reason={Reason} expires_at={ExpiresAt} correlation_id={CorrelationId}",
+                subject, activeBlock.Reason, activeBlock.ExpiresAt, cid);
+            return;
+        }
 
         if (!applications.TryResolve(context.User, out var application))
         {
