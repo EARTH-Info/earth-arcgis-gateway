@@ -42,11 +42,11 @@ Default behavior is fail closed. Timeout, malformed response, unavailable Access
 2. Resolve EarthID sub from the validated token.
 3. Canonicalize and validate the ArcGIS path.
 4. Resolve application + service + layer + operation from gateway-owned configuration.
-5. Ask the application's Access API for effective access.
-6. If denied: do not call ArcGIS. Log DENY with reason and policy version.
-7. Apply EarthID/user/app/resource rate policy.
+5. Apply the authenticated weighted rate policy using EarthID subject + tenant + application + service + layer + operation. This occurs before the Access API so abusive authenticated traffic can be rejected without consuming policy-service capacity.
+6. Ask the application's Access API for effective access.
+7. If denied: do not call ArcGIS. Log DENY with reason and policy version.
 8. Obtain the current upstream ArcGIS credential.
-9. Forward the request.
+9. Forward the request through the bounded ArcGIS upstream concurrency gate.
 10. Log ALLOW/THROTTLE/upstream failure with EarthID sub and correlation ID.
 
 ## Audit
