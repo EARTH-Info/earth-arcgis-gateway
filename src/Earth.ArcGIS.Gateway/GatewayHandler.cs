@@ -17,8 +17,9 @@ public static class GatewayHandler
 
     public static async Task HandleAsync(HttpContext context, string? path, IHttpClientFactory clients,
         ArcGisTokenProvider tokens, IOptions<GatewayOptions> options, IApplicationIdentityResolver applications,
-        IArcGisResourceResolver resources, IArcGisOperationPolicy operationPolicy,
-        IAccessPolicyClient accessPolicy, ITelemetryQueue telemetry, ILoggerFactory loggerFactory)
+        IArcGisResourceResolver resources, IArcGisOperationPolicy operationPolicy, IRateCostPolicy rateCostPolicy,
+        IGatewayRateLimiter gatewayRateLimiter, IAccessPolicyClient accessPolicy,
+        ITelemetryQueue telemetry, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("ArcGisAudit");
         var cfg = options.Value;
@@ -38,6 +39,21 @@ public static class GatewayHandler
         var operation = resource.Operation;
         if (!operationPolicy.IsAllowed(resource, context.Request.Method))
         { Audit(logger, subject, normalized, context.Request.Method, 403, 0, cid, "operation_denied"); context.Response.StatusCode = 403; return; }
+
+        var rateCost = rateCostPolicy.GetCost(resource, context.Request.Query);
+        var rateDecision = await gatewayRateLimiter.ConsumeAsync(
+            new RateLimitKey(subject, application.Id, resource.ServiceName, resource.LayerId),
+            rateCost.Units, context.RequestAborted);
+        if (!rateDecision.Allowed)
+        {
+            context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            context.Response.Headers.RetryAfter = rateDecision.RetryAfterSeconds.ToString();
+            telemetry.TryWrite(new TelemetryEvent(DateTimeOffset.UtcNow, subject, null, application.Id,
+                resource.ServiceName, resource.ServiceType, resource.LayerId, resource.Operation,
+                context.Request.Method, StatusCodes.Status429TooManyRequests, 0, "THROTTLE",
+                rateDecision.ReasonCode, null, cid));
+            return;
+        }
 
         var tenant = context.User.FindFirstValue("tenant_id") ?? context.User.FindFirstValue("tid");
         var accessRequest = new AccessPolicyRequest(
