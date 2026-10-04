@@ -87,7 +87,7 @@ The reverse proxy/WAF must:
 
 - terminate TLS using approved protocols/ciphers;
 - enforce connection and request-rate ceilings;
-- impose header/body/slow-client limits;
+- impose header/body/slow-client limits; the gateway also enforces a configurable total ArcGIS request timeout (`Protection:GatewayRequestTimeoutSeconds`);
 - preserve the original public Host and request path without decoding/re-encoding it unexpectedly;
 - restrict `/admin` by network policy in addition to EarthID RBAC where possible;
 - never expose ArcGIS service credentials;
