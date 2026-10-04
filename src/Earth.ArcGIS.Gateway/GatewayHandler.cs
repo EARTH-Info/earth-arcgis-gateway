@@ -24,7 +24,11 @@ public static class GatewayHandler
         var tenant = context.User.FindFirstValue("tenant_id") ?? context.User.FindFirstValue("tid");
         var cid = context.TraceIdentifier;
 
-        if (userBlocks.TryGetActive(subject, out var activeBlock))
+        var activeBlock = await userBlocks.GetActiveAsync(
+            subject,
+            context.RequestAborted);
+
+        if (activeBlock is not null)
         {
             Deny(context, telemetry, logger, subject, tenant, "unknown", null,
                 StatusCodes.Status403Forbidden, "user_blocked", cid, "blocked");
