@@ -78,18 +78,27 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
         var cursor = typeIndex + 1;
 
         if (serviceType.Equals("SceneServer", StringComparison.OrdinalIgnoreCase) &&
-            cursor + 1 < segments.Length &&
-            segments[cursor].Equals("layers", StringComparison.OrdinalIgnoreCase) &&
-            TryLayerId(segments[cursor + 1], out var sceneLayerId))
+            cursor < segments.Length &&
+            segments[cursor].Equals("layers", StringComparison.OrdinalIgnoreCase))
         {
+            if (cursor + 1 >= segments.Length ||
+                !TryLayerId(segments[cursor + 1], out var sceneLayerId))
+                return false;
+
             layerId = sceneLayerId;
             cursor += 2;
         }
-        else if (cursor < segments.Length &&
-                 TryLayerId(segments[cursor], out var parsedLayerId))
+        else if (cursor < segments.Length)
         {
-            layerId = parsedLayerId;
-            cursor++;
+            if (TryLayerId(segments[cursor], out var parsedLayerId))
+            {
+                layerId = parsedLayerId;
+                cursor++;
+            }
+            else if (LooksLikeLayerId(segments[cursor]))
+            {
+                return false;
+            }
         }
 
         var operation = cursor < segments.Length
@@ -116,6 +125,13 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
 
     private static bool TryLayerId(string value, out int layerId) =>
         int.TryParse(value, out layerId) && layerId >= 0;
+
+    private static bool LooksLikeLayerId(string value) =>
+        value.Length > 0 &&
+        (value.All(char.IsDigit) ||
+         (value[0] == '-' &&
+          value.Length > 1 &&
+          value[1..].All(char.IsDigit)));
 
     private static bool IsUnsafeSegment(string segment)
     {
