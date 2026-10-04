@@ -4,6 +4,7 @@ using Earth.ArcGIS.Gateway;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,7 +14,24 @@ builder.Services.AddSingleton<IApplicationIdentityResolver, ApplicationIdentityR
 builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>();
 builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
 builder.Services.AddSingleton<IRateCostPolicy, RateCostPolicy>();
-builder.Services.AddSingleton<IGatewayRateLimiter, InMemoryGatewayRateLimiter>();
+var redisConnection = builder.Configuration["Redis:ConnectionString"];
+if (string.IsNullOrWhiteSpace(redisConnection))
+{
+    builder.Services.AddSingleton<IGatewayRateLimiter, InMemoryGatewayRateLimiter>();
+}
+else
+{
+    var redisOptions = new RedisRateLimitOptions
+    {
+        ConnectionString = redisConnection,
+        Capacity = builder.Configuration.GetValue("Redis:RateCapacity", 240),
+        WindowSeconds = builder.Configuration.GetValue("Redis:RateWindowSeconds", 60)
+    };
+    builder.Services.AddSingleton(redisOptions);
+    builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+        ConnectionMultiplexer.Connect(redisOptions.ConnectionString));
+    builder.Services.AddSingleton<IGatewayRateLimiter, RedisGatewayRateLimiter>();
+}
 builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2));
 builder.Services.AddSingleton<IAccessPolicyClient, AccessPolicyClient>();
 builder.Services.AddSingleton<ITelemetryQueue, TelemetryQueue>();
