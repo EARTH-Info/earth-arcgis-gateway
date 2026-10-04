@@ -24,6 +24,7 @@ Do not expose the gateway container port directly to the Internet. The supplied 
 - DNS/TLS certificates for the public gateway hostname.
 - Reachability from the gateway to EarthID discovery/JWKS, each application Access API, ArcGIS Portal/Server, Redis and ClickHouse where configured.
 - A least-privilege ArcGIS service identity for Enterprise 11.3, or approved OAuth application credentials for validated 11.5 deployments.
+- A separate EarthID confidential OIDC client for the Admin Console with `https://<gateway-host>/signin-oidc` registered as a redirect URI.
 - ClickHouse table created from `deploy/clickhouse-schema.sql` when telemetry persistence is enabled.
 
 ## 3. Configure secrets
@@ -87,7 +88,7 @@ The reverse proxy/WAF must:
 - terminate TLS using approved protocols/ciphers;
 - enforce connection and request-rate ceilings;
 - impose header/body/slow-client limits;
-- preserve the original request path without decoding/re-encoding it unexpectedly;
+- preserve the original public Host and request path without decoding/re-encoding it unexpectedly;
 - restrict `/admin` by network policy in addition to EarthID RBAC where possible;
 - never expose ArcGIS service credentials;
 - pass health probes only from trusted monitoring networks.
