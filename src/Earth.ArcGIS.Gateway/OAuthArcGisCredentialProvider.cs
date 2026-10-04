@@ -72,7 +72,8 @@ public sealed class OAuthArcGisCredentialProvider(
                 UriKind.Absolute,
                 out var endpoint) ||
             endpoint.Scheme != Uri.UriSchemeHttps ||
-            !string.IsNullOrEmpty(endpoint.UserInfo))
+            !string.IsNullOrEmpty(endpoint.UserInfo) ||
+            !string.IsNullOrEmpty(endpoint.Fragment))
         {
             throw new InvalidOperationException(
                 "ArcGIS OAuth token endpoint must be an absolute HTTPS URL without user-info.");
@@ -141,7 +142,8 @@ public sealed class OAuthArcGisCredentialProvider(
                 UriKind.Absolute,
                 out var endpoint) ||
             endpoint.Scheme != Uri.UriSchemeHttps ||
-            !string.IsNullOrEmpty(endpoint.UserInfo))
+            !string.IsNullOrEmpty(endpoint.UserInfo) ||
+            !string.IsNullOrEmpty(endpoint.Fragment))
         {
             throw new InvalidOperationException(
                 "ArcGIS Portal token endpoint must be an absolute HTTPS URL without user-info.");
@@ -152,7 +154,9 @@ public sealed class OAuthArcGisCredentialProvider(
                 UriKind.Absolute,
                 out var serverUri) ||
             serverUri.Scheme != Uri.UriSchemeHttps ||
-            !string.IsNullOrEmpty(serverUri.UserInfo))
+            !string.IsNullOrEmpty(serverUri.UserInfo) ||
+            !string.IsNullOrEmpty(serverUri.Query) ||
+            !string.IsNullOrEmpty(serverUri.Fragment))
         {
             throw new InvalidOperationException(
                 "ArcGIS federated serverUrl must be an absolute HTTPS URL without user-info.");
