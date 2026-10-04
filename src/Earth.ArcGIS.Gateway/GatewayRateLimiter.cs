@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 
 namespace Earth.ArcGIS.Gateway;
 
-public sealed record RateLimitKey(string EarthIdSub, string Application, string Service, int? LayerId);
+public sealed record RateLimitKey(string EarthIdSub, string? Tenant, string Application, string Service, int? LayerId, string Operation);
 public sealed record RateLimitDecision(bool Allowed, int RemainingUnits, int RetryAfterSeconds, string ReasonCode);
 
 public interface IGatewayRateLimiter
