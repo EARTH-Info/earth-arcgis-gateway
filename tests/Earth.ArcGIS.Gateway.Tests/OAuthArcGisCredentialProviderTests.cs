@@ -176,7 +176,7 @@ public sealed class OAuthArcGisCredentialProviderTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    $"""{"token":"server-token","expires":{{expires}}}""")
+                    "{\"token\":\"server-token\",\"expires\":" + expires.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}")
             };
         }
     }
