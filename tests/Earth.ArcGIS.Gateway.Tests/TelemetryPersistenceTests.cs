@@ -120,7 +120,7 @@ public sealed class TelemetryPersistenceTests
         Assert.Contains("database=gis", handler.Uri!.Query, StringComparison.Ordinal);
         Assert.Contains("INSERT", Uri.UnescapeDataString(handler.Uri.Query), StringComparison.Ordinal);
         Assert.DoesNotContain("secret", handler.Uri.ToString(), StringComparison.Ordinal);
-        Assert.Contains("\\\"correlationId\\\":\\\"cid-1\\\"", handler.Body, StringComparison.Ordinal);
+        Assert.Contains("\"correlationId\":\"cid-1\"", handler.Body, StringComparison.Ordinal);
         Assert.Equal("gateway", handler.UserHeader);
         Assert.Equal("secret", handler.KeyHeader);
     }
