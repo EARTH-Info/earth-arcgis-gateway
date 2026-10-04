@@ -21,6 +21,19 @@ builder.Services.AddSingleton<IApplicationIdentityResolver, ApplicationIdentityR
 builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>();
 builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
 builder.Services.AddSingleton<IRateCostPolicy, RateCostPolicy>();
+
+var rateLimitOptions = new GatewayRateLimitOptions
+{
+    BurstCapacity = builder.Configuration.GetValue("RateLimit:BurstCapacity", 240),
+    BurstWindowSeconds = builder.Configuration.GetValue("RateLimit:BurstWindowSeconds", 60),
+    SustainedCapacity = builder.Configuration.GetValue("RateLimit:SustainedCapacity", 1_800),
+    SustainedWindowSeconds = builder.Configuration.GetValue("RateLimit:SustainedWindowSeconds", 15 * 60),
+    DailyCapacity = builder.Configuration.GetValue("RateLimit:DailyCapacity", 20_000),
+    DailyWindowSeconds = builder.Configuration.GetValue("RateLimit:DailyWindowSeconds", 24 * 60 * 60)
+};
+rateLimitOptions.Validate();
+builder.Services.AddSingleton(rateLimitOptions);
+
 var redisConnection = builder.Configuration["Redis:ConnectionString"];
 if (string.IsNullOrWhiteSpace(redisConnection))
 {
@@ -28,15 +41,17 @@ if (string.IsNullOrWhiteSpace(redisConnection))
 }
 else
 {
-    var redisOptions = new RedisRateLimitOptions
-    {
-        ConnectionString = redisConnection,
-        Capacity = builder.Configuration.GetValue("Redis:RateCapacity", 240),
-        WindowSeconds = builder.Configuration.GetValue("Redis:RateWindowSeconds", 60)
-    };
+    var redisOptions = new RedisRateLimitOptions { ConnectionString = redisConnection };
+    var redisConfiguration = ConfigurationOptions.Parse(redisConnection);
+    redisConfiguration.AbortOnConnectFail = false;
+    redisConfiguration.ConnectRetry = 1;
+    redisConfiguration.ConnectTimeout = 2_000;
+    redisConfiguration.SyncTimeout = 1_000;
+    redisConfiguration.AsyncTimeout = 1_000;
+
     builder.Services.AddSingleton(redisOptions);
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
-        ConnectionMultiplexer.Connect(redisOptions.ConnectionString));
+        ConnectionMultiplexer.Connect(redisConfiguration));
     builder.Services.AddSingleton<IGatewayRateLimiter, RedisGatewayRateLimiter>();
 }
 builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2))
