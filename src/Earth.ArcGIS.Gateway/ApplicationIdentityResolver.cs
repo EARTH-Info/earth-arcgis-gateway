@@ -18,9 +18,10 @@ public sealed class ApplicationIdentityResolver(IOptions<ApplicationOptions> opt
         var clientId = principal.FindFirst("client_id")?.Value ?? principal.FindFirst("azp")?.Value;
 
         var matches = options.Value.Registrations
-            .Where(x => x.Value.Audiences.Any(audiences.Contains)
-                && (x.Value.ClientIds.Length == 0 ||
-                    (clientId is not null && x.Value.ClientIds.Contains(clientId, StringComparer.Ordinal))))
+            .Where(x =>
+                x.Value.Audiences.Any(audiences.Contains) &&
+                clientId is not null &&
+                x.Value.ClientIds.Contains(clientId, StringComparer.Ordinal))
             .Take(2)
             .ToArray();
 
