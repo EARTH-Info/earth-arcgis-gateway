@@ -1,4 +1,7 @@
 using System.Security.Claims;
+using System.Text.Json;
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 
 namespace Earth.ArcGIS.Gateway;
@@ -10,12 +13,57 @@ public sealed record AdminBlockRequest(
 
 public static class AdminConsole
 {
+    public const string CookieScheme = "gateway-admin-cookie";
+    public const string OidcScheme = "gateway-admin-oidc";
+    public const string PolicyScheme = "gateway-admin-session";
+
     public static void MapRoutes(WebApplication app)
     {
+        app.MapGet("/admin/login", (
+            string? returnUrl) =>
+        {
+            var redirect = IsLocalReturnUrl(returnUrl)
+                ? returnUrl!
+                : "/admin";
+
+            return Results.Challenge(
+                new AuthenticationProperties
+                {
+                    RedirectUri = redirect
+                },
+                [OidcScheme]);
+        }).AllowAnonymous();
+
+        app.MapGet("/admin/denied", () =>
+            Results.Problem(
+                statusCode: StatusCodes.Status403Forbidden,
+                title: "Admin access denied"))
+            .AllowAnonymous();
+
+        app.MapGet("/admin/logout", async (HttpContext context) =>
+        {
+            await context.SignOutAsync(CookieScheme);
+            return Results.Redirect("/admin/login");
+        }).RequireAuthorization("gateway-admin");
+
         var group = app.MapGroup("/admin")
             .RequireAuthorization("gateway-admin");
 
-        group.MapGet("", () => Results.Content(Html, "text/html; charset=utf-8"));
+        group.MapGet("", (
+            HttpContext context,
+            IAntiforgery antiforgery) =>
+        {
+            var tokens = antiforgery.GetAndStoreTokens(context);
+            var tokenJson = JsonSerializer.Serialize(
+                tokens.RequestToken ?? string.Empty);
+
+            return Results.Content(
+                Html.Replace(
+                    "__CSRF_TOKEN_JSON__",
+                    tokenJson,
+                    StringComparison.Ordinal),
+                "text/html; charset=utf-8");
+        });
 
         group.MapGet("/api/overview", async (
             ITelemetryQueue telemetry,
@@ -157,8 +205,17 @@ public static class AdminConsole
             HttpContext context,
             IUserBlockStore blocks,
             AdminAuditStore audit,
+            IAntiforgery antiforgery,
             ILoggerFactory loggerFactory) =>
         {
+            if (!await ValidateMutationAsync(context, antiforgery))
+            {
+                return Results.BadRequest(new
+                {
+                    error = "invalid antiforgery token"
+                });
+            }
+
             if (string.IsNullOrWhiteSpace(request.EarthIdSub) ||
                 string.IsNullOrWhiteSpace(request.Reason))
             {
@@ -214,8 +271,17 @@ public static class AdminConsole
             HttpContext context,
             IUserBlockStore blocks,
             AdminAuditStore audit,
+            IAntiforgery antiforgery,
             ILoggerFactory loggerFactory) =>
         {
+            if (!await ValidateMutationAsync(context, antiforgery))
+            {
+                return Results.BadRequest(new
+                {
+                    error = "invalid antiforgery token"
+                });
+            }
+
             var adminSubject = context.User.FindFirstValue("sub") ?? "unknown";
             var removed = await blocks.UnblockAsync(
                 earthIdSub,
@@ -242,6 +308,31 @@ public static class AdminConsole
                 ? Results.NoContent()
                 : Results.NotFound(new { error = "block not found" });
         });
+    }
+
+    private static bool IsLocalReturnUrl(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.StartsWith('/', StringComparison.Ordinal) &&
+        !value.StartsWith("//", StringComparison.Ordinal) &&
+        !value.StartsWith("/\\", StringComparison.Ordinal);
+
+    private static async Task<bool> ValidateMutationAsync(
+        HttpContext context,
+        IAntiforgery antiforgery)
+    {
+        if (context.Request.Headers.Authorization.ToString()
+            .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        try
+        {
+            await antiforgery.ValidateRequestAsync(context);
+            return true;
+        }
+        catch (AntiforgeryValidationException)
+        {
+            return false;
+        }
     }
 
     private static string? TryHost(string? value) =>
@@ -296,12 +387,21 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:11px}.status{font-size:
     <div id="actionStatus" class="status muted"></div>
   </div>
   <div class="panel"><h2>Active blocks</h2><div id="blocks"></div></div>
+  <div class="panel">
+    <h2>Remove user block</h2>
+    <form id="unblockForm">
+      <input id="unblockSub" placeholder="EarthID subject (sub)" required>
+      <button type="submit">Unblock user</button>
+    </form>
+    <div id="unblockStatus" class="status muted"></div>
+  </div>
   <div class="panel"><h2>Rate policy</h2><pre id="rate"></pre></div>
   <div class="panel"><h2>Authentication health</h2><pre id="auth"></pre></div>
 </div>
 </section>
 </main>
 <script>
+const csrfToken=__CSRF_TOKEN_JSON__;
 const getJson=async p=>{const r=await fetch(p);if(!r.ok)throw new Error(await r.text());return r.json()};
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function table(items,cols){
@@ -331,8 +431,13 @@ async function refresh(){
 document.getElementById('blockForm').addEventListener('submit',async e=>{
  e.preventDefault();const minutes=document.getElementById('blockMinutes').value;
  const body={earthIdSub:document.getElementById('blockSub').value,reason:document.getElementById('blockReason').value,minutes:minutes?Number(minutes):null};
- const r=await fetch('/admin/api/blocks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+ const r=await fetch('/admin/api/blocks',{method:'POST',headers:{'content-type':'application/json','X-CSRF-TOKEN':csrfToken},body:JSON.stringify(body)});
  document.getElementById('actionStatus').textContent=r.ok?'Block applied':'Failed: '+await r.text();if(r.ok)await refresh();
+});
+document.getElementById('unblockForm').addEventListener('submit',async e=>{
+ e.preventDefault();const sub=document.getElementById('unblockSub').value;
+ const r=await fetch('/admin/api/blocks/'+encodeURIComponent(sub),{method:'DELETE',headers:{'X-CSRF-TOKEN':csrfToken}});
+ document.getElementById('unblockStatus').textContent=r.ok?'Block removed':'Failed: '+await r.text();if(r.ok)await refresh();
 });
 refresh().catch(e=>document.getElementById('cards').innerHTML='<div class="panel">Admin API error: '+esc(e.message)+'</div>');
 setInterval(()=>refresh().catch(()=>{}),5000);
