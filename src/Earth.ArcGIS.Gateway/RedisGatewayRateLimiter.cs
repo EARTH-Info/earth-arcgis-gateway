@@ -9,11 +9,11 @@ public sealed class RedisRateLimitOptions
     public string? ConnectionString { get; set; }
 }
 
-public sealed class RedisGatewayRateLimiter(
-    IConnectionMultiplexer redis,
-    GatewayRateLimitOptions options,
-    ILogger<RedisGatewayRateLimiter> logger) : IGatewayRateLimiter
+public sealed class RedisGatewayRateLimiter : IGatewayRateLimiter
 {
+    private readonly IConnectionMultiplexer redis;
+    private readonly GatewayRateLimitOptions options;
+    private readonly ILogger<RedisGatewayRateLimiter> logger;
     private const string Script = """
 local cost = tonumber(ARGV[1])
 local capacities = { tonumber(ARGV[2]), tonumber(ARGV[4]), tonumber(ARGV[6]) }
@@ -54,12 +54,12 @@ return {1, minimum, 0, 0}
     public RedisGatewayRateLimiter(
         IConnectionMultiplexer redis,
         GatewayRateLimitOptions options,
-        ILogger<RedisGatewayRateLimiter> logger,
-        bool validateOptions = true)
-        : this(redis, options, logger)
+        ILogger<RedisGatewayRateLimiter> logger)
     {
-        if (validateOptions)
-            options.Validate();
+        options.Validate();
+        this.redis = redis;
+        this.options = options;
+        this.logger = logger;
     }
 
     public async ValueTask<RateLimitDecision> ConsumeAsync(
