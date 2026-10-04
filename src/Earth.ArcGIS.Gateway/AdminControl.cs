@@ -175,7 +175,7 @@ public sealed class UserBlockStore : IUserBlockStore
                 "Admin subject is required.",
                 nameof(adminSubject));
 
-        if (duration is <= TimeSpan.Zero)
+        if (duration.HasValue && duration.Value <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
                 nameof(duration),
                 "Block duration must be positive when supplied.");
