@@ -9,8 +9,14 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.Configure<GatewayOptions>(builder.Configuration.GetSection("Gateway"));
-builder.Services.Configure<ApplicationOptions>(builder.Configuration.GetSection("Applications"));
+builder.Services.AddSingleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<ApplicationOptions>, ApplicationOptionsValidator>();
+builder.Services.AddOptions<GatewayOptions>()
+    .Bind(builder.Configuration.GetSection("Gateway"))
+    .ValidateOnStart();
+builder.Services.AddOptions<ApplicationOptions>()
+    .Bind(builder.Configuration.GetSection("Applications"))
+    .ValidateOnStart();
 builder.Services.AddSingleton<IApplicationIdentityResolver, ApplicationIdentityResolver>();
 builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>();
 builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
