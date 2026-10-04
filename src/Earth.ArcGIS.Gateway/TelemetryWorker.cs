@@ -108,7 +108,28 @@ public sealed class TelemetryWorker(
             return;
 
         var snapshot = batch.ToArray();
-        await sink.WriteBatchAsync(snapshot, cancellationToken);
-        batch.RemoveRange(0, snapshot.Length);
+
+        try
+        {
+            await sink.WriteBatchAsync(snapshot, cancellationToken);
+            batch.RemoveRange(0, snapshot.Length);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "telemetry_batch_failed count={Count}",
+                snapshot.Length);
+
+            // Preserve the batch for retry and avoid a hot failure loop.
+            await Task.Delay(
+                TimeSpan.FromSeconds(1),
+                cancellationToken);
+        }
     }
 }
