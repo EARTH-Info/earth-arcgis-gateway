@@ -13,6 +13,7 @@ public sealed class GatewayOptions
     public string OAuthTokenEndpoint { get; set; } = "";
     public string OAuthClientId { get; set; } = "";
     public string OAuthClientSecret { get; set; } = "";
+    public bool OAuthExchangeForFederatedServer { get; set; } = true;
 
     public int TokenExpirationMinutes { get; set; } = 30;
     public int RefreshSkewSeconds { get; set; } = 120;
