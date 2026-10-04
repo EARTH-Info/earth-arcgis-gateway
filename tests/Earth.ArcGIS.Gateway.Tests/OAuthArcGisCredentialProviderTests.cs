@@ -26,6 +26,21 @@ public sealed class OAuthArcGisCredentialProviderTests
     }
 
     [Fact]
+    public async Task TokenInsideRefreshSkewIsProactivelyRefreshed()
+    {
+        var handler = new StubHandler(
+            """{"access_token":"token-1","expires_in":30}""",
+            """{"access_token":"token-2","expires_in":30}""");
+        var provider = Create(handler);
+
+        Assert.Equal("token-1", await provider.GetTokenAsync(
+            TestContext.Current.CancellationToken));
+        Assert.Equal("token-2", await provider.GetTokenAsync(
+            TestContext.Current.CancellationToken));
+        Assert.Equal(2, handler.RequestCount);
+    }
+
+    [Fact]
     public async Task UsesClientCredentialsGrantWithoutExposingSecretInUri()
     {
         var handler = new StubHandler("""{"access_token":"token-1","expires_in":1800}""");
