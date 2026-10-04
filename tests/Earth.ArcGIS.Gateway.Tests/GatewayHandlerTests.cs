@@ -136,6 +136,7 @@ public sealed class GatewayHandlerTests
         string allowedPrefix = "/arcgis/rest/services/Land/Parcels")
     {
         var http = new HttpClient(upstream);
+        using var upstreamGate = new ArcGisUpstreamGate(64);
         await GatewayHandler.HandleAsync(
             context,
             Path,
@@ -151,6 +152,7 @@ public sealed class GatewayHandlerTests
             new ArcGisOperationPolicy(),
             new RateCostPolicy(),
             rate,
+            upstreamGate,
             access,
             new TelemetryQueue(),
             NullLoggerFactory.Instance);
