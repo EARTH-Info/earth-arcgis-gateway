@@ -11,12 +11,14 @@ EarthID user -> web application -> EARTH ArcGIS Gateway -> Portal/federated ArcG
 ## V1 controls
 
 1. Validate EarthID JWT issuer, audience, signature and expiry.
-2. Partition rate limiting by immutable EarthID `sub`.
-3. Allow only configured ArcGIS REST path prefixes.
-4. Reject known write/admin-style operations at the gateway.
-5. Acquire and cache short-lived ArcGIS tokens server-side.
-6. Emit structured audit events linked to EarthID `sub` and correlation ID.
-7. Never log JWTs, ArcGIS tokens, passwords or secrets.
+2. Resolve the trusted application from validated token audience/client context.
+3. Canonicalize the ArcGIS service/layer/operation and enforce configured path prefixes as an upper security bound.
+4. Enforce an explicit read-operation allowlist; unknown/write/admin operations fail closed.
+5. Apply distributed weighted rate protection by immutable EarthID `sub` + tenant + app + service + layer + operation before calling the application Access API.
+6. Ask the application Access API for the effective per-user resource decision and fail closed on timeout/error/malformed responses.
+7. Acquire and cache short-lived ArcGIS credentials server-side, retrying an ArcGIS authentication failure at most once.
+8. Stream normal ArcGIS responses and emit bounded asynchronous structured telemetry linked to EarthID `sub` and correlation ID.
+9. Never log JWTs, ArcGIS tokens, passwords or secrets.
 
 ## Important
 
@@ -24,13 +26,19 @@ The allowlist is the primary gateway authorization boundary. ArcGIS permissions 
 
 V1 intentionally keeps AI out of enforcement. Deterministic controls perform allow/deny/throttle decisions. Telemetry can later feed anomaly detection and AI-assisted profiling.
 
-## Next hardening
+## Implemented product-side hardening
 
-- Redis/distributed rate limits for multi-instance deployment.
-- Per-app/service/layer policy and weighted request costs.
-- Response byte and feature-count telemetry.
-- Query fingerprinting without retaining sensitive query values.
-- Temporary blocklist with expiry and administrative reason.
-- OAuth upstream provider alongside legacy service-account token provider.
-- Integration tests against ArcGIS Enterprise 11.3.
-- OpenTelemetry/SIEM export.
+- Redis-backed multi-window distributed rate limits and temporary user blocks.
+- Per-user/app/service/layer/operation authorization and weighted GIS request costs.
+- Bounded request buffering, streamed upstream responses and safe header forwarding.
+- ClickHouse telemetry with bounded asynchronous queue and durable local spool fallback.
+- EarthID-protected Admin Console with security events, live traffic, health and block/unblock controls.
+- Replaceable Enterprise 11.3 federated and Enterprise 11.5 OAuth credential providers.
+- Containerized non-root Production deployment with fail-fast Redis/ClickHouse requirements.
+
+## External release validation still required
+
+- JTUWMA ArcGIS Enterprise 11.3 end-to-end browser/access matrix.
+- ArcGIS Enterprise 11.5 OAuth compatibility run.
+- Measured performance and attack/load evidence from the target staging deployment.
+- Optional future SIEM/OpenTelemetry export and AI-assisted anomaly explanation do not replace deterministic enforcement.
