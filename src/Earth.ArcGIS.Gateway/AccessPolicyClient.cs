@@ -33,17 +33,17 @@ public sealed class AccessPolicyClient(
         AccessPolicyRequest request,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(application.AccessApiBaseUrl))
+        if (string.IsNullOrWhiteSpace(application.AccessApiAuthorizeUrl))
             return Deny("access_api_not_configured");
 
-        if (!Uri.TryCreate(application.AccessApiBaseUrl, UriKind.Absolute, out var baseUri) ||
+        if (!Uri.TryCreate(application.AccessApiAuthorizeUrl, UriKind.Absolute, out var authorizeUri) ||
             baseUri.Scheme != Uri.UriSchemeHttps)
             return Deny("access_api_invalid_configuration");
 
         try
         {
             var client = clients.CreateClient("access-policy");
-            using var message = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, "authorize"))
+            using var message = new HttpRequestMessage(HttpMethod.Post, authorizeUri)
             {
                 Content = JsonContent.Create(request)
             };
