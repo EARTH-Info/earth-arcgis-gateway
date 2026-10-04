@@ -69,6 +69,17 @@ public sealed class OAuthArcGisCredentialProviderTests
     }
 
     [Fact]
+    public async Task InvalidJsonResponseIsRejectedAsControlledProviderFailure()
+    {
+        var handler = new StubHandler("{not-json");
+        var provider = Create(handler);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.GetTokenAsync(
+                TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task MalformedResponseIsRejected()
     {
         var handler = new StubHandler("""{"access_token":"","expires_in":0}""");
