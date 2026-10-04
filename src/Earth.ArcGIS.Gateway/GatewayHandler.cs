@@ -251,6 +251,33 @@ public static class GatewayHandler
                 "arcgis_upstream_unavailable earthid_sub={EarthIdSub} path={Path} correlation_id={CorrelationId}",
                 subject, normalized, cid);
         }
+        catch (InvalidOperationException ex)
+        {
+            sw.Stop();
+            if (!context.Response.HasStarted)
+                context.Response.StatusCode = StatusCodes.Status502BadGateway;
+
+            RecordTelemetry(
+                telemetry,
+                subject,
+                tenant,
+                application.Id,
+                resource,
+                context.Request.Method,
+                StatusCodes.Status502BadGateway,
+                sw.ElapsedMilliseconds,
+                "DENY",
+                "credential_provider_failure",
+                accessDecision.PolicyVersion,
+                cid);
+
+            logger.LogError(
+                ex,
+                "arcgis_credential_provider_failure earthid_sub={EarthIdSub} path={Path} correlation_id={CorrelationId}",
+                subject,
+                normalized,
+                cid);
+        }
         finally
         {
             result?.Dispose();
