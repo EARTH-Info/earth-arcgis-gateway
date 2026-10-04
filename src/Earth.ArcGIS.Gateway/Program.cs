@@ -43,13 +43,33 @@ builder.Services.AddSingleton<IAccessPolicyClient, AccessPolicyClient>();
 builder.Services.AddSingleton<ITelemetryQueue, TelemetryQueue>();
 builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
 builder.Services.AddHostedService<TelemetryWorker>();
-builder.Services.AddHttpClient<ArcGisTokenProvider>(c => c.Timeout = TimeSpan.FromSeconds(10))
+builder.Services.AddHttpClient("arcgis-token", c => c.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
     {
         AllowAutoRedirect = false,
         ConnectTimeout = TimeSpan.FromSeconds(5),
         MaxResponseHeadersLength = 32
     });
+builder.Services.AddHttpClient("arcgis-oauth", c => c.Timeout = TimeSpan.FromSeconds(10))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        ConnectTimeout = TimeSpan.FromSeconds(5),
+        MaxResponseHeadersLength = 32
+    });
+builder.Services.AddSingleton<ArcGisTokenProvider>();
+builder.Services.AddSingleton<OAuthArcGisCredentialProvider>();
+builder.Services.AddSingleton<IArcGisCredentialProvider>(sp =>
+{
+    var cfg = sp.GetRequiredService<IOptions<GatewayOptions>>().Value;
+    return cfg.CredentialProvider.Trim().ToLowerInvariant() switch
+    {
+        "federated-11.3" => sp.GetRequiredService<ArcGisTokenProvider>(),
+        "oauth-11.5" => sp.GetRequiredService<OAuthArcGisCredentialProvider>(),
+        _ => throw new InvalidOperationException(
+            "Gateway:CredentialProvider must be 'federated-11.3' or 'oauth-11.5'.")
+    };
+});
 builder.Services.AddHttpClient("arcgis", c => c.Timeout = TimeSpan.FromSeconds(30))
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
     {
