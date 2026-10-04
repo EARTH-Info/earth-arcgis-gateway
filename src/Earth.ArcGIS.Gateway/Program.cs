@@ -12,6 +12,7 @@ builder.Services.Configure<ApplicationOptions>(builder.Configuration.GetSection(
 builder.Services.AddSingleton<IApplicationIdentityResolver, ApplicationIdentityResolver>();
 builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>();
 builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
+builder.Services.AddSingleton<IRateCostPolicy, RateCostPolicy>();
 builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2));
 builder.Services.AddSingleton<IAccessPolicyClient, AccessPolicyClient>();
 builder.Services.AddSingleton<ITelemetryQueue, TelemetryQueue>();
