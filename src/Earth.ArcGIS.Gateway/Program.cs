@@ -32,13 +32,32 @@ else
         ConnectionMultiplexer.Connect(redisOptions.ConnectionString));
     builder.Services.AddSingleton<IGatewayRateLimiter, RedisGatewayRateLimiter>();
 }
-builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2));
+builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        ConnectTimeout = TimeSpan.FromSeconds(2),
+        MaxResponseHeadersLength = 32
+    });
 builder.Services.AddSingleton<IAccessPolicyClient, AccessPolicyClient>();
 builder.Services.AddSingleton<ITelemetryQueue, TelemetryQueue>();
 builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
 builder.Services.AddHostedService<TelemetryWorker>();
-builder.Services.AddHttpClient<ArcGisTokenProvider>();
-builder.Services.AddHttpClient("arcgis", c => c.Timeout = TimeSpan.FromSeconds(100));
+builder.Services.AddHttpClient<ArcGisTokenProvider>(c => c.Timeout = TimeSpan.FromSeconds(10))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        ConnectTimeout = TimeSpan.FromSeconds(5),
+        MaxResponseHeadersLength = 32
+    });
+builder.Services.AddHttpClient("arcgis", c => c.Timeout = TimeSpan.FromSeconds(30))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        ConnectTimeout = TimeSpan.FromSeconds(5),
+        MaxConnectionsPerServer = 64,
+        MaxResponseHeadersLength = 64
+    });
 
 var authority = builder.Configuration["EarthId:Authority"]
     ?? throw new InvalidOperationException("EarthId:Authority is required.");
