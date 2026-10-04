@@ -29,7 +29,7 @@ services:
       Applications__Registrations__geoforest__ClientIds__0: ${GEOFOREST_CLIENT_ID}
       Applications__Registrations__geoforest__AccessApiAuthorizeUrl: ${GEOFOREST_ACCESS_API_AUTHORIZE_URL}
       Redis__ConnectionString: redis:6379,abortConnect=false
-      Telemetry__ClickHouseBaseUrl: ${CLICKHOUSE_BASE_URL:-}
+      Telemetry__ClickHouseBaseUrl: ${CLICKHOUSE_BASE_URL:?CLICKHOUSE_BASE_URL is required in Production}
       Telemetry__Database: ${CLICKHOUSE_DATABASE:-default}
       Telemetry__Table: ${CLICKHOUSE_TABLE:-gateway_telemetry}
       Telemetry__Username: ${CLICKHOUSE_USERNAME:-}
