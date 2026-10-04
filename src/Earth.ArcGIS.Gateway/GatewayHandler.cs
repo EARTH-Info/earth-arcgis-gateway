@@ -208,6 +208,8 @@ public static class GatewayHandler
             if (result.ContentType is not null)
                 context.Response.ContentType = result.ContentType;
 
+            result.ApplySafeResponseHeaders(context.Response);
+
             if (result.Prefix.Length > 0)
                 await context.Response.Body.WriteAsync(result.Prefix, context.RequestAborted);
 
@@ -331,6 +333,7 @@ public static class GatewayHandler
         using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), target);
         request.Headers.TryAddWithoutValidation("X-Esri-Authorization", "Bearer " + token);
         request.Headers.TryAddWithoutValidation("X-Correlation-ID", cid);
+        CopySafeRequestHeaders(context.Request, request);
 
         if (postBody is not null)
         {
@@ -383,6 +386,26 @@ public static class GatewayHandler
         {
             response.Dispose();
             throw;
+        }
+    }
+
+
+    private static void CopySafeRequestHeaders(
+        HttpRequest source,
+        HttpRequestMessage destination)
+    {
+        foreach (var name in new[]
+                 {
+                     "Accept",
+                     "If-None-Match",
+                     "If-Modified-Since",
+                     "Range"
+                 })
+        {
+            if (source.Headers.TryGetValue(name, out var values))
+                destination.Headers.TryAddWithoutValidation(
+                    name,
+                    values.ToArray());
         }
     }
 
@@ -501,6 +524,26 @@ public static class GatewayHandler
         public Stream Stream { get; }
         public byte[] Prefix { get; }
         public bool EndOfStream { get; }
+
+        public void ApplySafeResponseHeaders(HttpResponse response)
+        {
+            CopyHeader(_response.Headers, response, "Cache-Control");
+            CopyHeader(_response.Headers, response, "ETag");
+            CopyHeader(_response.Headers, response, "Vary");
+            CopyHeader(_response.Headers, response, "Accept-Ranges");
+            CopyHeader(_response.Content.Headers, response, "Last-Modified");
+            CopyHeader(_response.Content.Headers, response, "Expires");
+            CopyHeader(_response.Content.Headers, response, "Content-Disposition");
+        }
+
+        private static void CopyHeader(
+            HttpHeaders source,
+            HttpResponse destination,
+            string name)
+        {
+            if (source.TryGetValues(name, out var values))
+                destination.Headers[name] = values.ToArray();
+        }
 
         public void Dispose() => _response.Dispose();
     }
