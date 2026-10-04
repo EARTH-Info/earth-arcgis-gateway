@@ -62,7 +62,7 @@ public sealed class RedisGatewayRateLimiterTests
         using var redis = await ConnectAsync();
         var options = new GatewayRateLimitOptions
         {
-            BurstCapacity = 10,
+            BurstCapacity = 3,
             BurstWindowSeconds = 1,
             SustainedCapacity = 3,
             SustainedWindowSeconds = 30,
