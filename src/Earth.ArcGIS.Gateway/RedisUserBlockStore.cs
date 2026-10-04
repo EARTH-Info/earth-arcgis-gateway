@@ -58,11 +58,16 @@ public sealed class RedisUserBlockStore(
         var field = HashSubject(block.EarthIdSub);
         var db = redis.GetDatabase();
 
-        var stored = await db.StringSetAsync(
-                KeyPrefix + field,
-                json,
-                duration)
-            .WaitAsync(cancellationToken);
+        var stored = duration is null
+            ? await db.StringSetAsync(
+                    KeyPrefix + field,
+                    json)
+                .WaitAsync(cancellationToken)
+            : await db.StringSetAsync(
+                    KeyPrefix + field,
+                    json,
+                    duration.Value)
+                .WaitAsync(cancellationToken);
 
         if (!stored)
             throw new InvalidOperationException("Unable to persist distributed user block.");
