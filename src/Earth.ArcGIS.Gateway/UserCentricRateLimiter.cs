@@ -230,16 +230,18 @@ public sealed class RedisUserActivityRateLimiter : IUserActivityRateLimiter
 
     private const string Script = """
 local cost = tonumber(ARGV[1])
-local nowMs = tonumber(ARGV[2])
-local burst = tonumber(ARGV[3])
-local refill = tonumber(ARGV[4])
-local sustainedCapacity = tonumber(ARGV[5])
-local sustainedWindow = tonumber(ARGV[6])
-local dailyCapacity = tonumber(ARGV[7])
-local dailyWindow = tonumber(ARGV[8])
-local resourceCapacity = tonumber(ARGV[9])
-local resourceWindow = tonumber(ARGV[10])
-local aggregateTtl = tonumber(ARGV[11])
+local burst = tonumber(ARGV[2])
+local refill = tonumber(ARGV[3])
+local sustainedCapacity = tonumber(ARGV[4])
+local sustainedWindow = tonumber(ARGV[5])
+local dailyCapacity = tonumber(ARGV[6])
+local dailyWindow = tonumber(ARGV[7])
+local resourceCapacity = tonumber(ARGV[8])
+local resourceWindow = tonumber(ARGV[9])
+local aggregateTtl = tonumber(ARGV[10])
+
+local nowParts = redis.call('TIME')
+local nowMs = tonumber(nowParts[1]) * 1000 + math.floor(tonumber(nowParts[2]) / 1000)
 
 local tokens = tonumber(redis.call('HGET', KEYS[1], 'tokens'))
 local lastMs = tonumber(redis.call('HGET', KEYS[1], 'lastMs'))
@@ -346,7 +348,6 @@ return {1, math.floor(tokens), resource, 0, 0}
                     ],
                     [
                         units,
-                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         options.AggregateBurstCapacity,
                         options.AggregateRefillUnitsPerSecond,
                         options.SustainedCapacity,
