@@ -199,6 +199,7 @@ if (string.IsNullOrWhiteSpace(clickHouseBaseUrl))
     }
 
     builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
+    builder.Services.AddSingleton<IAuditQueryStore, RecentAuditQueryStore>();
 }
 else
 {
@@ -212,6 +213,7 @@ else
         });
     builder.Services.AddSingleton<ClickHouseTelemetrySink>();
     builder.Services.AddSingleton<ITelemetrySink, ResilientTelemetrySink>();
+    builder.Services.AddSingleton<IAuditQueryStore, ClickHouseAuditQueryStore>();
 }
 builder.Services.AddHostedService<TelemetryWorker>();
 
@@ -415,6 +417,7 @@ app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", (
     ITelemetryQueue telemetry,
     TelemetryPersistenceHealth persistence,
+    FileTelemetrySpool spool,
     IServiceProvider services) =>
 {
     var redis = services.GetService<IConnectionMultiplexer>();
@@ -442,6 +445,9 @@ app.MapGet("/health/ready", (
                 spooledBatches = persistence.SpooledBatches,
                 replayedBatches = persistence.ReplayedBatches,
                 droppedSpoolBatches = persistence.DroppedSpoolBatches,
+                quarantinedSpoolFiles = persistence.QuarantinedSpoolFiles,
+                pendingSpoolFiles = spool.CountPendingFiles(),
+                pendingSpoolBytes = spool.CountPendingBytes(),
                 storageFailures = persistence.StorageFailures,
                 lastSuccess = persistence.LastSuccess,
                 lastFailure = persistence.LastFailure
