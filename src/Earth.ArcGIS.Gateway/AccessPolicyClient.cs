@@ -117,19 +117,12 @@ public sealed class AccessPolicyClient(
                 rateLimitProfile = profileElement.Clone();
             }
 
-            return allowedElement.GetBoolean()
-                ? new AccessPolicyDecision(
-                    true,
-                    reason,
-                    policyVersion,
-                    cacheTtlSeconds,
-                    rateLimitProfile)
-                : new AccessPolicyDecision(
-                    false,
-                    reason,
-                    policyVersion,
-                    cacheTtlSeconds,
-                    rateLimitProfile);
+            return new AccessPolicyDecision(
+                allowedElement.GetBoolean(),
+                reason,
+                policyVersion,
+                cacheTtlSeconds,
+                rateLimitProfile);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -203,5 +196,7 @@ public sealed class AccessPolicyClient(
         string? version = null) =>
         new(false, reason, version);
 
-    private sealed class AccessPolicyResponseTooLargeException : Exception;
+    private sealed class AccessPolicyResponseTooLargeException : Exception
+    {
+    }
 }
