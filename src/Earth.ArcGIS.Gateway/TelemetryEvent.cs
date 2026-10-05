@@ -17,4 +17,16 @@ public sealed record TelemetryEvent(
     string? PolicyVersion,
     string CorrelationId,
     long? ResponseBytes = null,
-    int? RateLimitRemaining = null);
+    int? RateLimitRemaining = null,
+    string? ActivityClass = null,
+    int? RateCostUnits = null,
+    int? ResourceRateRemaining = null,
+    string? RateProfileVersion = null,
+    string? ConcurrencyClass = null,
+    bool? IsSpatial = null,
+    bool? ReturnsGeometry = null,
+    bool? IsPaged = null,
+    bool? IsHeavy = null,
+    bool? IsExtractionLike = null,
+    string? QueryFingerprint = null,
+    long? RecordCount = null);
