@@ -3,16 +3,32 @@ using System.Security.Claims;
 
 namespace Earth.ArcGIS.Gateway;
 
+public enum AdminAccessLevel
+{
+    Viewer = 1,
+    SecurityOperator = 2,
+    Administrator = 3
+}
+
 public sealed class AdminOptions
 {
     public string[] AllowedSubjects { get; set; } = Array.Empty<string>();
-    public string[] AllowedRoles { get; set; } = ["gateway-admin"];
+    public string[] ViewerRoles { get; set; } = ["gateway-viewer"];
+    public string[] SecurityOperatorRoles { get; set; } = ["gateway-security-operator"];
+    public string[] AdministratorRoles { get; set; } = ["gateway-admin"];
+
+    // Backward compatibility for existing configuration while deployments migrate
+    // to the explicit tiered role arrays. These roles are administrator-equivalent.
+    public string[] AllowedRoles { get; set; } = Array.Empty<string>();
     public int RecentTelemetryLimit { get; set; } = 500;
 }
 
 public static class AdminAuthorization
 {
-    public static bool IsAuthorized(ClaimsPrincipal principal, AdminOptions options)
+    public static bool IsAuthorized(
+        ClaimsPrincipal principal,
+        AdminOptions options,
+        AdminAccessLevel requiredLevel = AdminAccessLevel.Administrator)
     {
         var subject = principal.FindFirstValue("sub");
         if (!string.IsNullOrWhiteSpace(subject) &&
@@ -23,10 +39,49 @@ public static class AdminAuthorization
             .Concat(principal.FindAll("roles"))
             .SelectMany(claim => claim.Value.Split(
                 [' ', ','],
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        return roles.Any(role =>
-            options.AllowedRoles.Contains(role, StringComparer.OrdinalIgnoreCase));
+        var level = ResolveLevel(roles, options);
+        return level >= requiredLevel;
+    }
+
+    public static AdminAccessLevel? ResolveLevel(
+        ClaimsPrincipal principal,
+        AdminOptions options)
+    {
+        var subject = principal.FindFirstValue("sub");
+        if (!string.IsNullOrWhiteSpace(subject) &&
+            options.AllowedSubjects.Contains(subject, StringComparer.Ordinal))
+            return AdminAccessLevel.Administrator;
+
+        var roles = principal.FindAll("role")
+            .Concat(principal.FindAll("roles"))
+            .SelectMany(claim => claim.Value.Split(
+                [' ', ','],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return ResolveLevel(roles, options);
+    }
+
+    private static AdminAccessLevel? ResolveLevel(
+        IReadOnlySet<string> roles,
+        AdminOptions options)
+    {
+        if (roles.Any(role =>
+                options.AdministratorRoles.Contains(role, StringComparer.OrdinalIgnoreCase) ||
+                options.AllowedRoles.Contains(role, StringComparer.OrdinalIgnoreCase)))
+            return AdminAccessLevel.Administrator;
+
+        if (roles.Any(role =>
+                options.SecurityOperatorRoles.Contains(role, StringComparer.OrdinalIgnoreCase)))
+            return AdminAccessLevel.SecurityOperator;
+
+        if (roles.Any(role =>
+                options.ViewerRoles.Contains(role, StringComparer.OrdinalIgnoreCase)))
+            return AdminAccessLevel.Viewer;
+
+        return null;
     }
 }
 
