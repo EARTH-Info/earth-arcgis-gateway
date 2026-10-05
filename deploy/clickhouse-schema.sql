@@ -49,3 +49,18 @@ ALTER TABLE gateway_telemetry ADD COLUMN IF NOT EXISTS isExtractionLike Nullable
 ALTER TABLE gateway_telemetry ADD COLUMN IF NOT EXISTS queryFingerprint Nullable(String);
 ALTER TABLE gateway_telemetry ADD COLUMN IF NOT EXISTS recordCount Nullable(UInt64);
 ALTER TABLE gateway_telemetry MODIFY TTL timestamp + INTERVAL 180 DAY DELETE;
+
+CREATE TABLE IF NOT EXISTS gateway_admin_audit
+(
+    timestamp DateTime64(3, 'UTC'),
+    adminSubject String,
+    action LowCardinality(String),
+    targetSubject String,
+    reason String,
+    expiresAt Nullable(DateTime64(3, 'UTC')),
+    correlationId String
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp, adminSubject, targetSubject, correlationId)
+TTL timestamp + INTERVAL 365 DAY DELETE;
