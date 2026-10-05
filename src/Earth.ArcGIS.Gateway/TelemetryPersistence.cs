@@ -10,6 +10,7 @@ public sealed class TelemetryPersistenceOptions
     public string ClickHouseBaseUrl { get; set; } = "";
     public string Database { get; set; } = "default";
     public string Table { get; set; } = "gateway_telemetry";
+    public string AdminAuditTable { get; set; } = "gateway_admin_audit";
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
     public string SpoolDirectory { get; set; } = "data/telemetry-spool";
