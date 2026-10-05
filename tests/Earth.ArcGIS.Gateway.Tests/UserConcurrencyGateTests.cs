@@ -7,7 +7,7 @@ namespace Earth.ArcGIS.Gateway.Tests;
 public sealed class UserConcurrencyGateTests
 {
     [Fact]
-    public async Task InMemoryGateIsolatesUsersAndHeavyClass()
+    public async Task InMemoryGateEnforcesTotalAndHeavyLimitsPerUser()
     {
         var options = new UserConcurrencyOptions
         {
@@ -17,28 +17,29 @@ public sealed class UserConcurrencyGateTests
         };
         var gate = new InMemoryUserConcurrencyGate(options);
 
-        var a1 = await gate.TryEnterAsync(Key("sub-a"), false, CancellationToken.None);
-        var a2 = await gate.TryEnterAsync(Key("sub-a"), false, CancellationToken.None);
-        var a3 = await gate.TryEnterAsync(Key("sub-a"), false, CancellationToken.None);
-        var b1 = await gate.TryEnterAsync(Key("sub-b"), false, CancellationToken.None);
-        var heavy1 = await gate.TryEnterAsync(Key("sub-a"), true, CancellationToken.None);
-        var heavy2 = await gate.TryEnterAsync(Key("sub-a"), true, CancellationToken.None);
+        var heavy = await gate.TryEnterAsync(Key("sub-a"), true, CancellationToken.None);
+        var interactive = await gate.TryEnterAsync(Key("sub-a"), false, CancellationToken.None);
+        var totalDenied = await gate.TryEnterAsync(Key("sub-a"), false, CancellationToken.None);
+        var secondHeavyDenied = await gate.TryEnterAsync(Key("sub-a"), true, CancellationToken.None);
+        var otherUser = await gate.TryEnterAsync(Key("sub-b"), false, CancellationToken.None);
 
-        Assert.NotNull(a1);
-        Assert.NotNull(a2);
-        Assert.Null(a3);
-        Assert.NotNull(b1);
-        Assert.NotNull(heavy1);
-        Assert.Null(heavy2);
+        Assert.NotNull(heavy);
+        Assert.NotNull(interactive);
+        Assert.Null(totalDenied);
+        Assert.Null(secondHeavyDenied);
+        Assert.NotNull(otherUser);
 
-        await a1!.DisposeAsync();
-        await a2!.DisposeAsync();
-        await b1!.DisposeAsync();
-        await heavy1!.DisposeAsync();
+        await heavy!.DisposeAsync();
+        var recovered = await gate.TryEnterAsync(Key("sub-a"), true, CancellationToken.None);
+        Assert.NotNull(recovered);
+
+        await interactive!.DisposeAsync();
+        await otherUser!.DisposeAsync();
+        await recovered!.DisposeAsync();
     }
 
     [Fact]
-    public async Task RedisGateIsAtomicAcrossInstancesAndReleases()
+    public async Task RedisGateIsAtomicAcrossInstancesAndHeavyCountsTowardTotal()
     {
         using var redis = await ConnectAsync();
         var options = new UserConcurrencyOptions
@@ -57,20 +58,45 @@ public sealed class UserConcurrencyGateTests
             NullLogger<RedisUserConcurrencyGate>.Instance);
         var key = Key("sub-" + Guid.NewGuid().ToString("N"));
 
-        var one = await first.TryEnterAsync(key, false, CancellationToken.None);
-        var two = await second.TryEnterAsync(key, false, CancellationToken.None);
-        var denied = await first.TryEnterAsync(key, false, CancellationToken.None);
+        var heavy = await first.TryEnterAsync(key, true, CancellationToken.None);
+        var interactive = await second.TryEnterAsync(key, false, CancellationToken.None);
+        var totalDenied = await first.TryEnterAsync(key, false, CancellationToken.None);
+        var secondHeavyDenied = await second.TryEnterAsync(key, true, CancellationToken.None);
 
-        Assert.NotNull(one);
-        Assert.NotNull(two);
-        Assert.Null(denied);
+        Assert.NotNull(heavy);
+        Assert.NotNull(interactive);
+        Assert.Null(totalDenied);
+        Assert.Null(secondHeavyDenied);
 
-        await one!.DisposeAsync();
-        var recovered = await second.TryEnterAsync(key, false, CancellationToken.None);
-        Assert.NotNull(recovered);
+        await heavy!.DisposeAsync();
+        var recoveredHeavy = await second.TryEnterAsync(key, true, CancellationToken.None);
+        Assert.NotNull(recoveredHeavy);
 
-        await two!.DisposeAsync();
-        await recovered!.DisposeAsync();
+        await interactive!.DisposeAsync();
+        await recoveredHeavy!.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task LeaseReleaseIsIdempotent()
+    {
+        var options = new UserConcurrencyOptions
+        {
+            InteractiveLimit = 1,
+            HeavyLimit = 1,
+            LeaseSeconds = 90
+        };
+        var gate = new InMemoryUserConcurrencyGate(options);
+        var key = Key("sub-idempotent");
+
+        var lease = await gate.TryEnterAsync(key, true, CancellationToken.None);
+        Assert.NotNull(lease);
+
+        await lease!.DisposeAsync();
+        await lease.DisposeAsync();
+
+        var next = await gate.TryEnterAsync(key, true, CancellationToken.None);
+        Assert.NotNull(next);
+        await next!.DisposeAsync();
     }
 
     private static UserConcurrencyKey Key(string subject) =>
