@@ -68,18 +68,59 @@ public sealed class GatewayOptionsValidator : IValidateOptions<GatewayOptions>
         const string root = "/arcgis/rest/services/";
         if (string.IsNullOrWhiteSpace(value) ||
             !value.StartsWith(root, StringComparison.OrdinalIgnoreCase) ||
-            value.Length <= root.Length)
+            value.Length <= root.Length ||
+            value.Contains('\\') ||
+            value.Contains("//", StringComparison.Ordinal) ||
+            value.Contains('?') ||
+            value.Contains('#'))
+        {
             return false;
+        }
 
         var normalized = value.TrimEnd('/');
-        return normalized.Length > root.TrimEnd('/').Length &&
-               !normalized.Contains("..", StringComparison.Ordinal) &&
-               !normalized.Contains('\\') &&
-               !normalized.Contains("//", StringComparison.Ordinal) &&
-               !normalized.Contains('%') &&
-               !normalized.Contains('?') &&
-               !normalized.Contains('#') &&
-               !normalized.Contains(':');
+        if (normalized.Length <= root.TrimEnd('/').Length)
+            return false;
+
+        var remainder = normalized[root.Length..];
+        var rawSegments = remainder.Split('/');
+        if (rawSegments.Length == 0 || rawSegments.Any(string.IsNullOrWhiteSpace))
+            return false;
+
+        foreach (var rawSegment in rawSegments)
+        {
+            string decoded;
+            try
+            {
+                decoded = Uri.UnescapeDataString(rawSegment);
+            }
+            catch (UriFormatException)
+            {
+                return false;
+            }
+
+            if (decoded is "." or ".." ||
+                decoded.Contains('/') ||
+                decoded.Contains('\\') ||
+                decoded.Contains('%') ||
+                decoded.Contains('?') ||
+                decoded.Contains('#') ||
+                decoded.Contains(':') ||
+                decoded.Any(char.IsControl))
+            {
+                return false;
+            }
+
+            var canonical = Uri.EscapeDataString(decoded);
+            if (!string.Equals(
+                    canonical,
+                    rawSegment,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsHttpsAbsolute(string value) =>
