@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -15,6 +14,7 @@ public sealed class TelemetryPersistenceOptions
     public string Password { get; set; } = "";
     public string SpoolDirectory { get; set; } = "data/telemetry-spool";
     public int MaxSpoolFiles { get; set; } = 1_000;
+    public long MaxSpoolBytes { get; set; } = 512L * 1024 * 1024;
     public int ReplayBatchFiles { get; set; } = 10;
 }
 
@@ -24,6 +24,7 @@ public sealed class TelemetryPersistenceHealth
     private long spooledBatches;
     private long replayedBatches;
     private long droppedSpoolBatches;
+    private long quarantinedSpoolFiles;
     private long storageFailures;
     private long lastSuccessUnixMs;
     private long lastFailureUnixMs;
@@ -32,11 +33,10 @@ public sealed class TelemetryPersistenceHealth
     public long SpooledBatches => Interlocked.Read(ref spooledBatches);
     public long ReplayedBatches => Interlocked.Read(ref replayedBatches);
     public long DroppedSpoolBatches => Interlocked.Read(ref droppedSpoolBatches);
+    public long QuarantinedSpoolFiles => Interlocked.Read(ref quarantinedSpoolFiles);
     public long StorageFailures => Interlocked.Read(ref storageFailures);
-    public DateTimeOffset? LastSuccess =>
-        ReadTimestamp(lastSuccessUnixMs);
-    public DateTimeOffset? LastFailure =>
-        ReadTimestamp(lastFailureUnixMs);
+    public DateTimeOffset? LastSuccess => ReadTimestamp(lastSuccessUnixMs);
+    public DateTimeOffset? LastFailure => ReadTimestamp(lastFailureUnixMs);
 
     public void MarkPersisted()
     {
@@ -47,6 +47,7 @@ public sealed class TelemetryPersistenceHealth
     public void MarkSpooled() => Interlocked.Increment(ref spooledBatches);
     public void MarkReplayed() => Interlocked.Increment(ref replayedBatches);
     public void MarkSpoolDropped() => Interlocked.Increment(ref droppedSpoolBatches);
+    public void MarkSpoolQuarantined() => Interlocked.Increment(ref quarantinedSpoolFiles);
 
     public void MarkStorageFailure()
     {
@@ -154,7 +155,6 @@ public sealed class FileTelemetrySpool(
         try
         {
             Directory.CreateDirectory(cfg.SpoolDirectory);
-            BoundSpoolDirectory();
 
             var finalPath = Path.Combine(
                 cfg.SpoolDirectory,
@@ -179,6 +179,7 @@ public sealed class FileTelemetrySpool(
             File.Move(tempPath, finalPath);
             tempPath = null;
             health.MarkSpooled();
+            BoundSpoolDirectory();
         }
         finally
         {
@@ -219,23 +220,33 @@ public sealed class FileTelemetrySpool(
 
             foreach (var file in files)
             {
-                var events = new List<TelemetryEvent>();
-                foreach (var line in await File.ReadAllLinesAsync(file, cancellationToken))
+                try
                 {
-                    if (string.IsNullOrWhiteSpace(line))
-                        continue;
+                    var events = new List<TelemetryEvent>();
+                    foreach (var line in await File.ReadAllLinesAsync(file, cancellationToken))
+                    {
+                        if (string.IsNullOrWhiteSpace(line))
+                            continue;
 
-                    var item = JsonSerializer.Deserialize<TelemetryEvent>(line, JsonOptions);
-                    if (item is null)
-                        throw new InvalidOperationException($"Telemetry spool file '{Path.GetFileName(file)}' is invalid.");
-                    events.Add(item);
+                        var item = JsonSerializer.Deserialize<TelemetryEvent>(line, JsonOptions);
+                        if (item is null)
+                        {
+                            throw new JsonException(
+                                $"Telemetry spool file '{Path.GetFileName(file)}' contains a null event.");
+                        }
+                        events.Add(item);
+                    }
+
+                    if (events.Count > 0)
+                        await destination.WriteBatchAsync(events, cancellationToken);
+
+                    File.Delete(file);
+                    health.MarkReplayed();
                 }
-
-                if (events.Count > 0)
-                    await destination.WriteBatchAsync(events, cancellationToken);
-
-                File.Delete(file);
-                health.MarkReplayed();
+                catch (JsonException ex)
+                {
+                    Quarantine(file, ex);
+                }
             }
         }
         finally
@@ -252,24 +263,54 @@ public sealed class FileTelemetrySpool(
         return Directory.EnumerateFiles(cfg.SpoolDirectory, "*.jsonl").Count();
     }
 
+    public long CountPendingBytes()
+    {
+        if (!Directory.Exists(cfg.SpoolDirectory))
+            return 0;
+
+        return Directory
+            .EnumerateFiles(cfg.SpoolDirectory, "*.jsonl")
+            .Sum(path => new FileInfo(path).Length);
+    }
+
     private void BoundSpoolDirectory()
     {
         var maxFiles = Math.Max(1, cfg.MaxSpoolFiles);
+        var maxBytes = Math.Max(1L, cfg.MaxSpoolBytes);
         var files = Directory
             .EnumerateFiles(cfg.SpoolDirectory, "*.jsonl")
-            .OrderBy(x => x, StringComparer.Ordinal)
+            .Select(path => new FileInfo(path))
+            .OrderBy(x => x.Name, StringComparer.Ordinal)
             .ToList();
+        var bytes = files.Sum(x => x.Length);
 
-        while (files.Count >= maxFiles)
+        while (files.Count > maxFiles || bytes > maxBytes)
         {
             var oldest = files[0];
             files.RemoveAt(0);
-            File.Delete(oldest);
+            bytes -= oldest.Length;
+            File.Delete(oldest.FullName);
             health.MarkSpoolDropped();
             logger.LogError(
-                "telemetry_spool_capacity_exceeded dropped_file={File}",
-                Path.GetFileName(oldest));
+                "telemetry_spool_capacity_exceeded dropped_file={File} remaining_bytes={RemainingBytes}",
+                oldest.Name,
+                bytes);
         }
+    }
+
+    private void Quarantine(string file, Exception exception)
+    {
+        var quarantineDirectory = Path.Combine(cfg.SpoolDirectory, "quarantine");
+        Directory.CreateDirectory(quarantineDirectory);
+        var destination = Path.Combine(
+            quarantineDirectory,
+            $"{Path.GetFileNameWithoutExtension(file)}-{Guid.NewGuid():N}.invalid.jsonl");
+        File.Move(file, destination);
+        health.MarkSpoolQuarantined();
+        logger.LogError(
+            exception,
+            "telemetry_spool_corrupt quarantined_file={File}",
+            Path.GetFileName(destination));
     }
 }
 
