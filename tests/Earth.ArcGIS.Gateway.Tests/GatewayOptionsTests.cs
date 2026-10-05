@@ -36,6 +36,34 @@ public sealed class GatewayOptionsTests
         Assert.True(result.Succeeded);
     }
 
+    [Fact]
+    public void CanonicalEncodedSpaceInAllowedPrefixIsAccepted()
+    {
+        var options = ValidFederatedOptions();
+        options.AllowedPathPrefixes =
+            ["/arcgis/rest/services/Land/My%20Parcels/"];
+
+        var result = new GatewayOptionsValidator().Validate(null, options);
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData("/arcgis/rest/services/Land%2FAdmin/")]
+    [InlineData("/arcgis/rest/services/Land%252FAdmin/")]
+    [InlineData("/arcgis/rest/services/%252e%252e/Admin/")]
+    [InlineData("/arcgis/rest/services/Land%25Admin/")]
+    [InlineData("/arcgis/rest/services/http%3Aevil/")]
+    public void UnsafeOrDoubleEncodedAllowedPrefixIsRejected(string prefix)
+    {
+        var options = ValidFederatedOptions();
+        options.AllowedPathPrefixes = [prefix];
+
+        var result = new GatewayOptionsValidator().Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
+
     private static GatewayOptions ValidFederatedOptions() =>
         new()
         {
