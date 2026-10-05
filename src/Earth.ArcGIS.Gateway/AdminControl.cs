@@ -190,21 +190,42 @@ public sealed class UserBlockStore : IUserBlockStore
     }
 }
 
-public sealed class AdminAuditStore
+public interface IAdminAuditStore
+{
+    Task AddAsync(
+        AdminEnforcementEvent item,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<AdminEnforcementEvent>> GetRecentAsync(
+        int max,
+        CancellationToken cancellationToken);
+}
+
+public sealed class AdminAuditStore : IAdminAuditStore
 {
     private const int Capacity = 1_000;
     private readonly ConcurrentQueue<AdminEnforcementEvent> events = new();
 
-    public void Add(AdminEnforcementEvent item)
+    public Task AddAsync(
+        AdminEnforcementEvent item,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         events.Enqueue(item);
         while (events.Count > Capacity)
             events.TryDequeue(out _);
+        return Task.CompletedTask;
     }
 
-    public IReadOnlyList<AdminEnforcementEvent> GetRecent(int max) =>
-        events
+    public Task<IReadOnlyList<AdminEnforcementEvent>> GetRecentAsync(
+        int max,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<AdminEnforcementEvent> result = events
             .Reverse()
             .Take(Math.Clamp(max, 1, Capacity))
             .ToArray();
+        return Task.FromResult(result);
+    }
 }
