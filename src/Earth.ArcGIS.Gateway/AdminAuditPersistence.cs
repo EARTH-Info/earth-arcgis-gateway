@@ -87,13 +87,13 @@ public sealed class ClickHouseAdminAuditStore(
     private Uri BuildQueryUri(int limit)
     {
         var baseUri = ValidateBaseUri();
-        var sql = $"""
-SELECT timestamp, adminSubject, action, targetSubject, reason, expiresAt, correlationId
-FROM {cfg.AdminAuditTable}
-ORDER BY timestamp DESC
-LIMIT {{limit:UInt32}}
-FORMAT JSONEachRow
-""";
+        var sql = string.Join(
+            '\n',
+            "SELECT timestamp, adminSubject, action, targetSubject, reason, expiresAt, correlationId",
+            $"FROM {cfg.AdminAuditTable}",
+            "ORDER BY timestamp DESC",
+            "LIMIT {limit:UInt32}",
+            "FORMAT JSONEachRow");
         return BuildUri(baseUri, sql, limit);
     }
 
