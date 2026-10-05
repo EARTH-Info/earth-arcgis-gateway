@@ -20,6 +20,50 @@ public sealed class UserCentricRateLimiterTests
     }
 
     [Fact]
+    public async Task NormalMultiLayerPanBurstIsAllowedWithinInteractiveCapacity()
+    {
+        var limiter = new InMemoryUserActivityRateLimiter(
+            Options(burst: 80, refill: 20, resource: 100));
+
+        var decisions = new List<UserRateDecision>();
+        for (var layer = 0; layer < 12; layer++)
+        {
+            decisions.Add(await limiter.ConsumeAsync(
+                Key(layer),
+                Activity(4),
+                CancellationToken.None));
+        }
+
+        Assert.All(decisions, decision => Assert.True(decision.Allowed));
+        Assert.Equal(32, decisions[^1].RemainingAggregateUnits);
+    }
+
+    [Fact]
+    public async Task SustainedExtractionEventuallyThrottlesAggregateUser()
+    {
+        var limiter = new InMemoryUserActivityRateLimiter(
+            Options(burst: 20, refill: 1, resource: 100));
+
+        UserRateDecision? denied = null;
+        for (var i = 0; i < 20; i++)
+        {
+            var decision = await limiter.ConsumeAsync(
+                Key(i % 10),
+                Activity(3),
+                CancellationToken.None);
+            if (!decision.Allowed)
+            {
+                denied = decision;
+                break;
+            }
+        }
+
+        Assert.NotNull(denied);
+        Assert.Equal("aggregate_user_budget_exceeded", denied!.ReasonCode);
+        Assert.True(denied.RetryAfterSeconds > 0);
+    }
+
+    [Fact]
     public async Task DifferentUsersHaveIndependentAggregateBudgets()
     {
         var limiter = new InMemoryUserActivityRateLimiter(
