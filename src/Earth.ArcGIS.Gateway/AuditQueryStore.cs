@@ -166,19 +166,19 @@ public sealed class ClickHouseAuditQueryStore(
             parameters.Add(new("param_to", query.To.Value.UtcDateTime.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
         }
 
-        var sql = $"""
-SELECT
- timestamp, earthIdSub, tenant, application, service, serviceType, layerId,
- operation, method, statusCode, durationMs, decision, reasonCode, policyVersion,
- correlationId, responseBytes, rateLimitRemaining, activityClass, rateCostUnits,
- resourceRateRemaining, rateProfileVersion, concurrencyClass, isSpatial,
- returnsGeometry, isPaged, isHeavy, isExtractionLike, queryFingerprint, recordCount
-FROM {cfg.Table}
-WHERE {string.Join(" AND ", where)}
-ORDER BY timestamp DESC
-LIMIT {{limit:UInt32}}
-FORMAT JSONEachRow
-""";
+        var sql = string.Join(
+            '\n',
+            "SELECT",
+            " timestamp, earthIdSub, tenant, application, service, serviceType, layerId,",
+            " operation, method, statusCode, durationMs, decision, reasonCode, policyVersion,",
+            " correlationId, responseBytes, rateLimitRemaining, activityClass, rateCostUnits,",
+            " resourceRateRemaining, rateProfileVersion, concurrencyClass, isSpatial,",
+            " returnsGeometry, isPaged, isHeavy, isExtractionLike, queryFingerprint, recordCount",
+            $"FROM {cfg.Table}",
+            $"WHERE {string.Join(" AND ", where)}",
+            "ORDER BY timestamp DESC",
+            "LIMIT {limit:UInt32}",
+            "FORMAT JSONEachRow");
 
         parameters.Add(new("database", cfg.Database));
         parameters.Add(new("query", sql));
