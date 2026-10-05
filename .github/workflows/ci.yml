@@ -52,12 +52,11 @@ jobs:
 
       - name: Initialize ClickHouse schema
         run: |
-          curl --fail --silent --show-error \
-            --data-binary @deploy/clickhouse-schema.sql \
-            'http://localhost:8123/?multiquery=1'
-          curl --fail --silent --show-error \
-            --data-binary 'SELECT count() FROM system.tables WHERE database=currentDatabase() AND name IN (\"gateway_telemetry\",\"gateway_admin_audit\")' \
-            http://localhost:8123/
+          CLICKHOUSE_CONTAINER="$(docker ps --filter ancestor=clickhouse/clickhouse-server:25.8 --format '{{.ID}}' | head -1)"
+          test -n "$CLICKHOUSE_CONTAINER"
+          docker exec -i "$CLICKHOUSE_CONTAINER" clickhouse-client --multiquery < deploy/clickhouse-schema.sql
+          TABLE_COUNT="$(docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM system.tables WHERE database=currentDatabase() AND name IN ('gateway_telemetry','gateway_admin_audit')")"
+          test "$TABLE_COUNT" = "2"
 
       - name: Build gateway
         run: dotnet build src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj --configuration Release --no-restore
