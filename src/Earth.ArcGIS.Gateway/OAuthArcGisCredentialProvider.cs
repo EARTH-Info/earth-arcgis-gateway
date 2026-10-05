@@ -9,6 +9,7 @@ public sealed class OAuthArcGisCredentialProvider(
     IOptions<GatewayOptions> options,
     ILogger<OAuthArcGisCredentialProvider> logger) : IArcGisCredentialProvider
 {
+    private const int MaxTokenResponseBytes = 64 * 1024;
     private readonly GatewayOptions cfg = options.Value;
     private readonly SemaphoreSlim gate = new(1, 1);
     private TokenState? token;
@@ -42,13 +43,13 @@ public sealed class OAuthArcGisCredentialProvider(
         }
     }
 
-    public void InvalidateToken() => Interlocked.Exchange(ref token, null);
+    public void InvalidateToken() =>
+        Interlocked.Exchange(ref token, null);
 
     private bool Fresh(TokenState? current) =>
         current is not null &&
-        current.ExpiresAt >
-            DateTimeOffset.UtcNow.AddSeconds(
-                Math.Max(30, cfg.RefreshSkewSeconds));
+        current.ExpiresAt > DateTimeOffset.UtcNow.AddSeconds(
+            Math.Max(30, cfg.RefreshSkewSeconds));
 
     private async Task<TokenState> RequestTokenAsync(
         CancellationToken cancellationToken)
@@ -101,26 +102,22 @@ public sealed class OAuthArcGisCredentialProvider(
             cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        await using var stream =
-            await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await ParseJsonAsync(
-            stream,
+        using var document = await ReadTokenJsonAsync(
+            response,
             "ArcGIS OAuth token response is not valid JSON.",
             cancellationToken);
         var root = document.RootElement;
 
         if (root.TryGetProperty("error", out _))
+        {
             throw new InvalidOperationException(
                 "ArcGIS OAuth token endpoint returned an error.");
+        }
 
-        if (!root.TryGetProperty(
-                "access_token",
-                out var tokenElement) ||
+        if (!root.TryGetProperty("access_token", out var tokenElement) ||
             tokenElement.ValueKind != JsonValueKind.String ||
             string.IsNullOrWhiteSpace(tokenElement.GetString()) ||
-            !root.TryGetProperty(
-                "expires_in",
-                out var expiresElement) ||
+            !root.TryGetProperty("expires_in", out var expiresElement) ||
             !expiresElement.TryGetInt32(out var expiresInSeconds) ||
             expiresInSeconds <= 0)
         {
@@ -177,17 +174,17 @@ public sealed class OAuthArcGisCredentialProvider(
             cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        await using var stream =
-            await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await ParseJsonAsync(
-            stream,
+        using var document = await ReadTokenJsonAsync(
+            response,
             "ArcGIS OAuth federated token response is not valid JSON.",
             cancellationToken);
         var root = document.RootElement;
 
         if (root.TryGetProperty("error", out _))
+        {
             throw new InvalidOperationException(
                 "ArcGIS OAuth federated token exchange returned an error.");
+        }
 
         if (!root.TryGetProperty("token", out var tokenElement) ||
             tokenElement.ValueKind != JsonValueKind.String ||
@@ -203,25 +200,27 @@ public sealed class OAuthArcGisCredentialProvider(
 
         return new TokenState(
             tokenElement.GetString()!,
-            DateTimeOffset.FromUnixTimeMilliseconds(
-                expiresMilliseconds));
+            DateTimeOffset.FromUnixTimeMilliseconds(expiresMilliseconds));
     }
 
-    private static async Task<JsonDocument> ParseJsonAsync(
-        Stream stream,
-        string errorMessage,
+    private static async Task<JsonDocument> ReadTokenJsonAsync(
+        HttpResponseMessage response,
+        string invalidJsonMessage,
         CancellationToken cancellationToken)
     {
-        try
+        if (response.Content.Headers.ContentLength is > MaxTokenResponseBytes)
         {
-            return await JsonDocument.ParseAsync(
-                stream,
-                cancellationToken: cancellationToken);
+            throw new InvalidOperationException(
+                "ArcGIS OAuth token response exceeds the maximum allowed size.");
         }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException(errorMessage, ex);
-        }
+
+        await using var stream =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await BoundedJsonReader.ReadAsync(
+            stream,
+            MaxTokenResponseBytes,
+            invalidJsonMessage,
+            cancellationToken);
     }
 
     private static bool TryReadEpochMilliseconds(
