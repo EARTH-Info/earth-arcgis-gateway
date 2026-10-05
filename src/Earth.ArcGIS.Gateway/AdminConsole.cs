@@ -267,16 +267,19 @@ public static class AdminConsole
             HttpContext context) =>
             Results.Ok(await blocks.GetActiveAsync(context.RequestAborted)));
 
-        group.MapGet("/api/admin-audit", (
-            AdminAuditStore audit,
+        group.MapGet("/api/admin-audit", async (
+            IAdminAuditStore audit,
+            HttpContext context,
             int? limit) =>
-            Results.Ok(audit.GetRecent(Math.Clamp(limit ?? 100, 1, 500))));
+            Results.Ok(await audit.GetRecentAsync(
+                Math.Clamp(limit ?? 100, 1, 500),
+                context.RequestAborted)));
 
         group.MapPost("/api/blocks", async (
             AdminBlockRequest request,
             HttpContext context,
             IUserBlockStore blocks,
-            AdminAuditStore audit,
+            IAdminAuditStore audit,
             IAntiforgery antiforgery,
             ILoggerFactory loggerFactory) =>
         {
@@ -317,14 +320,15 @@ public static class AdminConsole
                 duration,
                 context.RequestAborted);
 
-            audit.Add(new AdminEnforcementEvent(
+            var auditEvent = new AdminEnforcementEvent(
                 DateTimeOffset.UtcNow,
                 adminSubject,
                 "BLOCK",
                 block.EarthIdSub,
                 block.Reason,
                 block.ExpiresAt,
-                context.TraceIdentifier));
+                context.TraceIdentifier);
+            await audit.AddAsync(auditEvent, context.RequestAborted);
 
             loggerFactory.CreateLogger("AdminAudit").LogWarning(
                 "admin_enforcement_change admin_sub={AdminSubject} action={Action} target_sub={TargetSubject} reason={Reason} expires_at={ExpiresAt} correlation_id={CorrelationId}",
@@ -342,7 +346,7 @@ public static class AdminConsole
             string earthIdSub,
             HttpContext context,
             IUserBlockStore blocks,
-            AdminAuditStore audit,
+            IAdminAuditStore audit,
             IAntiforgery antiforgery,
             ILoggerFactory loggerFactory) =>
         {
@@ -359,14 +363,15 @@ public static class AdminConsole
                 earthIdSub,
                 context.RequestAborted);
 
-            audit.Add(new AdminEnforcementEvent(
+            var auditEvent = new AdminEnforcementEvent(
                 DateTimeOffset.UtcNow,
                 adminSubject,
                 "UNBLOCK",
                 earthIdSub,
                 removed ? "manual_unblock" : "not_found",
                 null,
-                context.TraceIdentifier));
+                context.TraceIdentifier);
+            await audit.AddAsync(auditEvent, context.RequestAborted);
 
             loggerFactory.CreateLogger("AdminAudit").LogWarning(
                 "admin_enforcement_change admin_sub={AdminSubject} action={Action} target_sub={TargetSubject} result={Result} correlation_id={CorrelationId}",
@@ -479,7 +484,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 function table(items,cols){
  if(!items.length)return '<span class="muted">No records</span>';
  return '<table><thead><tr>'+cols.map(c=>'<th>'+esc(c[0])+'</th>').join('')+'</tr></thead><tbody>'+
- items.map(x=>'<tr>'+cols.map(c=>'<td>'+esc(c[1](x))+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
+ items.map(x=>'<tr>'+cols.map(c=>'<td>'+esc(c[1](x))+'</td>').join('')+'</tbody></table>';
 }
 async function refresh(){
  const [o,t,s,b,a,r,apps,res]=await Promise.all([
