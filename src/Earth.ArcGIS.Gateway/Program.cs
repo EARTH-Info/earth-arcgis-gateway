@@ -112,7 +112,6 @@ builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
 builder.Services.AddSingleton<IRequestActivityClassifier, RequestActivityClassifier>();
 builder.Services.AddSingleton<IArcGisUpstreamGate>(_ =>
     new ArcGisUpstreamGate(protection.MaxConcurrentArcGisRequests));
-builder.Services.AddSingleton<AdminAuditStore>();
 builder.Services.AddSingleton<IConnectionMultiplexerAccessor, ConnectionMultiplexerAccessor>();
 
 var adminOptions = new AdminOptions
@@ -200,6 +199,7 @@ if (string.IsNullOrWhiteSpace(clickHouseBaseUrl))
 
     builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
     builder.Services.AddSingleton<IAuditQueryStore, RecentAuditQueryStore>();
+    builder.Services.AddSingleton<IAdminAuditStore, AdminAuditStore>();
 }
 else
 {
@@ -214,6 +214,7 @@ else
     builder.Services.AddSingleton<ClickHouseTelemetrySink>();
     builder.Services.AddSingleton<ITelemetrySink, ResilientTelemetrySink>();
     builder.Services.AddSingleton<IAuditQueryStore, ClickHouseAuditQueryStore>();
+    builder.Services.AddSingleton<IAdminAuditStore, ClickHouseAdminAuditStore>();
 }
 builder.Services.AddHostedService<TelemetryWorker>();
 
