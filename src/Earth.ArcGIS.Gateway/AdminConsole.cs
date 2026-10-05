@@ -40,8 +40,13 @@ public static class AdminConsole
                 title: "Admin access denied"))
             .AllowAnonymous();
 
-        app.MapGet("/admin/logout", async (HttpContext context) =>
+        app.MapPost("/admin/logout", async (
+            HttpContext context,
+            IAntiforgery antiforgery) =>
         {
+            if (!await ValidateMutationAsync(context, antiforgery))
+                return Results.BadRequest(new { error = "invalid antiforgery token" });
+
             await context.SignOutAsync(CookieScheme);
             return Results.Redirect("/admin/login");
         }).RequireAuthorization("gateway-admin");
@@ -89,6 +94,8 @@ public static class AdminConsole
                 telemetryAccepted = telemetry.Accepted,
                 telemetryDropped = telemetry.Dropped,
                 pendingSpoolFiles = spool.CountPendingFiles(),
+                pendingSpoolBytes = spool.CountPendingBytes(),
+                quarantinedSpoolFiles = persistence.QuarantinedSpoolFiles,
                 storageFailures = persistence.StorageFailures,
                 activeBlocks = activeBlocks.Count,
                 upstreamConcurrency = new
@@ -128,35 +135,100 @@ public static class AdminConsole
             })));
 
         group.MapGet("/api/rate-profiles", (
-            GatewayRateLimitOptions rate) =>
+            UserCentricRateLimitOptions rate,
+            GisCostOptions gisCost,
+            UserConcurrencyOptions concurrency,
+            ProtectionOptions protection) =>
             Results.Ok(new
             {
-                burst = new
+                userRate = new
                 {
-                    capacity = rate.BurstCapacity,
-                    windowSeconds = rate.BurstWindowSeconds
+                    profileVersion = rate.ProfileVersion,
+                    aggregateBurstCapacity = rate.AggregateBurstCapacity,
+                    aggregateRefillUnitsPerSecond = rate.AggregateRefillUnitsPerSecond,
+                    sustainedCapacity = rate.SustainedCapacity,
+                    sustainedWindowSeconds = rate.SustainedWindowSeconds,
+                    dailyCapacity = rate.DailyCapacity,
+                    dailyWindowSeconds = rate.DailyWindowSeconds,
+                    resourceCapacity = rate.ResourceCapacity,
+                    resourceWindowSeconds = rate.ResourceWindowSeconds
                 },
-                sustained = new
+                gisCost = new
                 {
-                    capacity = rate.SustainedCapacity,
-                    windowSeconds = rate.SustainedWindowSeconds
+                    gisCost.ProfileVersion,
+                    gisCost.Metadata,
+                    gisCost.Tile,
+                    gisCost.SceneNode,
+                    gisCost.CountOnly,
+                    gisCost.IdsOnly,
+                    gisCost.ExtentOnly,
+                    gisCost.AttributeQuery,
+                    gisCost.GeometryQuery,
+                    gisCost.SpatialSurcharge,
+                    gisCost.AllFieldsSurcharge,
+                    gisCost.PaginationSurcharge,
+                    gisCost.Identify,
+                    gisCost.Find,
+                    gisCost.Attachment,
+                    gisCost.Export,
+                    gisCost.Fallback,
+                    gisCost.HeavyThreshold
                 },
-                daily = new
+                concurrency = new
                 {
-                    capacity = rate.DailyCapacity,
-                    windowSeconds = rate.DailyWindowSeconds
+                    interactiveLimit = concurrency.InteractiveLimit,
+                    heavyLimit = concurrency.HeavyLimit,
+                    leaseSeconds = concurrency.LeaseSeconds
+                },
+                sourceRateLimit = new
+                {
+                    enabled = protection.SourceRateLimit.Enabled,
+                    protection.SourceRateLimit.TokenLimit,
+                    protection.SourceRateLimit.TokensPerPeriod,
+                    protection.SourceRateLimit.ReplenishmentPeriodSeconds
                 }
             }));
 
         group.MapGet("/api/live-traffic", (
             ITelemetryQueue telemetry,
+            AdminOptions admin,
             int? limit) =>
-            Results.Ok(telemetry.GetRecent(Math.Clamp(limit ?? 100, 1, 500))));
+        {
+            var max = Math.Clamp(admin.RecentTelemetryLimit, 1, 1000);
+            return Results.Ok(telemetry.GetRecent(Math.Clamp(limit ?? Math.Min(100, max), 1, max)));
+        });
 
-        group.MapGet("/api/audit", (
-            ITelemetryQueue telemetry,
+        group.MapGet("/api/audit", async (
+            IAuditQueryStore audit,
+            HttpContext context,
+            string? sub,
+            string? application,
+            string? service,
+            int? layerId,
+            string? operation,
+            string? decision,
+            int? statusCode,
+            string? correlationId,
+            DateTimeOffset? from,
+            DateTimeOffset? to,
             int? limit) =>
-            Results.Ok(telemetry.GetRecent(Math.Clamp(limit ?? 250, 1, 1000))));
+        {
+            var result = await audit.QueryAsync(
+                new AuditQuery(
+                    sub,
+                    application,
+                    service,
+                    layerId,
+                    operation,
+                    decision,
+                    statusCode,
+                    correlationId,
+                    from,
+                    to,
+                    Math.Clamp(limit ?? 250, 1, 1000)),
+                context.RequestAborted);
+            return Results.Ok(result);
+        });
 
         group.MapGet("/api/security", (
             ITelemetryQueue telemetry,
