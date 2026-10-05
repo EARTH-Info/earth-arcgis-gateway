@@ -38,13 +38,27 @@ External environment unavailability must remain BLOCKED EXTERNAL and must never 
 
 ### P1 — product-side merge blockers
 
-#### #17 Rate cost + per-user distributed concurrency
+#### #17 User-centric GIS-aware rate limiting
 
-- Correct ArcGIS query weighting, including default geometry behavior.
-- Cover count/ids/extent/attribute/spatial/all-fields/pagination/export patterns for GET and POST.
-- Make cost profiles configurable and validated.
-- Add per-subject+application concurrent expensive-query limits.
-- Production concurrency state must be distributed through Redis with TTL/recovery semantics.
+Canonical design: `docs/USER-CENTRIC-GIS-RATE-LIMITING.md`.
+
+Architecture decision:
+- validated EarthID user/application is the primary limiter identity;
+- source-IP limiter is optional pre-auth/edge protection only;
+- aggregate user/app budget spans all layers/services;
+- secondary user/layer/operation/time counters support targeted controls and analysis;
+- Redis is the synchronous enforcement store;
+- ClickHouse telemetry stays asynchronous/off the request path;
+- per-user interactive/heavy concurrency prevents one user monopolizing ArcGIS;
+- final thresholds are calibrated from JTUWMA/GeoForest staging rather than guessed.
+
+Child work packages:
+- #26 optional source-IP edge limiter;
+- #27 aggregate EarthID user/application Redis token bucket;
+- #28 GIS request classification + secondary user/layer/time controls;
+- #29 per-user interactive/heavy distributed concurrency;
+- #30 telemetry + materialized risk/profile signals;
+- #31 JTUWMA/GeoForest staging calibration.
 
 #### #18 Proxy/request/token/stream hardening
 
