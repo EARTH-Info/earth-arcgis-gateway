@@ -151,12 +151,13 @@ if (string.IsNullOrWhiteSpace(redisConnection))
     if (builder.Environment.IsProduction())
     {
         throw new InvalidOperationException(
-            "Redis:ConnectionString is required in Production so user rate limits, concurrency and blocks remain distributed.");
+            "Redis:ConnectionString is required in Production so user rate limits, concurrency, policy cache and blocks remain distributed.");
     }
 
     builder.Services.AddSingleton<IUserActivityRateLimiter, InMemoryUserActivityRateLimiter>();
     builder.Services.AddSingleton<IUserConcurrencyGate, InMemoryUserConcurrencyGate>();
     builder.Services.AddSingleton<IUserBlockStore, UserBlockStore>();
+    builder.Services.AddSingleton<IAccessPolicyCache, InMemoryAccessPolicyCache>();
 }
 else
 {
@@ -172,6 +173,7 @@ else
     builder.Services.AddSingleton<IUserActivityRateLimiter, RedisUserActivityRateLimiter>();
     builder.Services.AddSingleton<IUserConcurrencyGate, RedisUserConcurrencyGate>();
     builder.Services.AddSingleton<IUserBlockStore, RedisUserBlockStore>();
+    builder.Services.AddSingleton<IAccessPolicyCache, RedisAccessPolicyCache>();
 }
 
 builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2))
@@ -181,7 +183,8 @@ builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSe
         ConnectTimeout = TimeSpan.FromSeconds(2),
         MaxResponseHeadersLength = 32
     });
-builder.Services.AddSingleton<IAccessPolicyClient, AccessPolicyClient>();
+builder.Services.AddSingleton<AccessPolicyClient>();
+builder.Services.AddSingleton<IAccessPolicyClient, CachingAccessPolicyClient>();
 builder.Services.AddSingleton<ITelemetryQueue, TelemetryQueue>();
 builder.Services.Configure<TelemetryPersistenceOptions>(
     builder.Configuration.GetSection("Telemetry"));
