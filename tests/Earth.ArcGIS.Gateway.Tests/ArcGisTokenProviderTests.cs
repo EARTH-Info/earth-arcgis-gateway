@@ -71,11 +71,21 @@ public sealed class ArcGisTokenProviderTests
     [Fact]
     public async Task MalformedTokenResponseIsRejected()
     {
-        var handler = new MalformedHandler();
-        var provider = Create(handler);
+        var provider = Create(new MalformedHandler());
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => provider.GetTokenAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task OversizedPortalTokenResponseIsRejected()
+    {
+        var provider = Create(new OversizedHandler());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.GetTokenAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("maximum allowed size", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static ArcGisTokenProvider Create(HttpMessageHandler handler)
@@ -149,5 +159,19 @@ public sealed class ArcGisTokenProviderTests
             {
                 Content = new StringContent("""{"token":"","expires":"not-a-number"}""")
             });
+    }
+
+    private sealed class OversizedHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(new string('x', 70 * 1024))
+            };
+            return Task.FromResult(response);
+        }
     }
 }
