@@ -48,7 +48,8 @@ public interface IUserConcurrencyGate
 public sealed class InMemoryUserConcurrencyGate : IUserConcurrencyGate
 {
     private readonly UserConcurrencyOptions options;
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> totalGates = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> heavyGates = new();
 
     public InMemoryUserConcurrencyGate(UserConcurrencyOptions options)
     {
@@ -60,22 +61,44 @@ public sealed class InMemoryUserConcurrencyGate : IUserConcurrencyGate
         bool heavy,
         CancellationToken cancellationToken)
     {
-        var concurrencyClass = heavy ? "heavy" : "interactive";
-        var limit = heavy ? options.HeavyLimit : options.InteractiveLimit;
-        var identity = BuildIdentity(key, concurrencyClass);
-        var gate = gates.GetOrAdd(identity, _ => new SemaphoreSlim(limit, limit));
+        var identity = BuildIdentity(key);
+        var totalGate = totalGates.GetOrAdd(
+            identity,
+            _ => new SemaphoreSlim(options.InteractiveLimit, options.InteractiveLimit));
 
-        if (!await gate.WaitAsync(0, cancellationToken))
+        if (!await totalGate.WaitAsync(0, cancellationToken))
             return null;
 
-        return new InMemoryLease(gate, concurrencyClass);
+        if (!heavy)
+            return new InMemoryLease(totalGate, null, "interactive");
+
+        var heavyGate = heavyGates.GetOrAdd(
+            identity,
+            _ => new SemaphoreSlim(options.HeavyLimit, options.HeavyLimit));
+
+        try
+        {
+            if (!await heavyGate.WaitAsync(0, cancellationToken))
+            {
+                totalGate.Release();
+                return null;
+            }
+
+            return new InMemoryLease(totalGate, heavyGate, "heavy");
+        }
+        catch
+        {
+            totalGate.Release();
+            throw;
+        }
     }
 
-    private static string BuildIdentity(UserConcurrencyKey key, string concurrencyClass) =>
-        $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}\n{concurrencyClass}";
+    private static string BuildIdentity(UserConcurrencyKey key) =>
+        $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}";
 
     private sealed class InMemoryLease(
-        SemaphoreSlim gate,
+        SemaphoreSlim totalGate,
+        SemaphoreSlim? heavyGate,
         string concurrencyClass) : IUserConcurrencyLease
     {
         private int released;
@@ -83,9 +106,11 @@ public sealed class InMemoryUserConcurrencyGate : IUserConcurrencyGate
 
         public ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref released, 1) == 0)
-                gate.Release();
+            if (Interlocked.Exchange(ref released, 1) != 0)
+                return ValueTask.CompletedTask;
 
+            heavyGate?.Release();
+            totalGate.Release();
             return ValueTask.CompletedTask;
         }
     }
@@ -94,24 +119,49 @@ public sealed class InMemoryUserConcurrencyGate : IUserConcurrencyGate
 public sealed class RedisUserConcurrencyGate : IUserConcurrencyGate
 {
     private const string AcquireScript = """
-local now = tonumber(ARGV[1])
-local expires = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
+local leaseMs = tonumber(ARGV[1])
+local totalLimit = tonumber(ARGV[2])
+local heavyLimit = tonumber(ARGV[3])
 local leaseId = ARGV[4]
+local isHeavy = tonumber(ARGV[5])
+
+local nowParts = redis.call('TIME')
+local now = tonumber(nowParts[1]) * 1000 + math.floor(tonumber(nowParts[2]) / 1000)
+local expires = now + leaseMs
 
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
-local current = redis.call('ZCARD', KEYS[1])
-if current >= limit then
-  return {0, current}
+local totalCurrent = redis.call('ZCARD', KEYS[1])
+if totalCurrent >= totalLimit then
+  return {0, totalCurrent, -1}
+end
+
+local heavyCurrent = 0
+if isHeavy == 1 then
+  redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+  heavyCurrent = redis.call('ZCARD', KEYS[2])
+  if heavyCurrent >= heavyLimit then
+    return {0, totalCurrent, heavyCurrent}
+  end
 end
 
 redis.call('ZADD', KEYS[1], expires, leaseId)
-redis.call('PEXPIRE', KEYS[1], math.max(1000, expires - now + 5000))
-return {1, current + 1}
+redis.call('PEXPIRE', KEYS[1], math.max(1000, leaseMs + 5000))
+
+if isHeavy == 1 then
+  redis.call('ZADD', KEYS[2], expires, leaseId)
+  redis.call('PEXPIRE', KEYS[2], math.max(1000, leaseMs + 5000))
+  heavyCurrent = heavyCurrent + 1
+end
+
+return {1, totalCurrent + 1, heavyCurrent}
 """;
 
     private const string ReleaseScript = """
-return redis.call('ZREM', KEYS[1], ARGV[1])
+local removed = redis.call('ZREM', KEYS[1], ARGV[1])
+if tonumber(ARGV[2]) == 1 then
+  redis.call('ZREM', KEYS[2], ARGV[1])
+end
+return removed
 """;
 
     private readonly IConnectionMultiplexer redis;
@@ -136,28 +186,39 @@ return redis.call('ZREM', KEYS[1], ARGV[1])
         cancellationToken.ThrowIfCancellationRequested();
 
         var concurrencyClass = heavy ? "heavy" : "interactive";
-        var limit = heavy ? options.HeavyLimit : options.InteractiveLimit;
-        var redisKey = BuildRedisKey(key, concurrencyClass);
+        var totalKey = BuildRedisKey(key, "total");
+        var heavyKey = BuildRedisKey(key, "heavy");
         var leaseId = Guid.NewGuid().ToString("N");
-        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var expiresMs = nowMs + (options.LeaseSeconds * 1000L);
 
         try
         {
             var db = redis.GetDatabase();
             var result = (RedisResult[]?)await db.ScriptEvaluateAsync(
                     AcquireScript,
-                    [redisKey],
-                    [nowMs, expiresMs, limit, leaseId])
+                    [totalKey, heavyKey],
+                    [
+                        options.LeaseSeconds * 1000L,
+                        options.InteractiveLimit,
+                        options.HeavyLimit,
+                        leaseId,
+                        heavy ? 1 : 0
+                    ])
                 .WaitAsync(cancellationToken);
 
-            if (result is null || result.Length != 2)
+            if (result is null || result.Length != 3)
                 throw new RedisException("Concurrency script returned a malformed result.");
 
             if ((long)result[0] != 1)
                 return null;
 
-            return new RedisLease(db, redisKey, leaseId, concurrencyClass, logger);
+            return new RedisLease(
+                db,
+                totalKey,
+                heavyKey,
+                leaseId,
+                heavy,
+                concurrencyClass,
+                logger);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -170,17 +231,19 @@ return redis.call('ZREM', KEYS[1], ARGV[1])
         }
     }
 
-    private static RedisKey BuildRedisKey(UserConcurrencyKey key, string concurrencyClass)
+    private static RedisKey BuildRedisKey(UserConcurrencyKey key, string scope)
     {
-        var raw = $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}\n{concurrencyClass}";
+        var raw = $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}\n{scope}";
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
         return $"eiag:concurrency:{hash}";
     }
 
     private sealed class RedisLease(
         IDatabase database,
-        RedisKey key,
+        RedisKey totalKey,
+        RedisKey heavyKey,
         string leaseId,
+        bool heavy,
         string concurrencyClass,
         ILogger logger) : IUserConcurrencyLease
     {
@@ -196,8 +259,8 @@ return redis.call('ZREM', KEYS[1], ARGV[1])
             {
                 await database.ScriptEvaluateAsync(
                     ReleaseScript,
-                    [key],
-                    [leaseId]);
+                    [totalKey, heavyKey],
+                    [leaseId, heavy ? 1 : 0]);
             }
             catch (RedisException ex)
             {
