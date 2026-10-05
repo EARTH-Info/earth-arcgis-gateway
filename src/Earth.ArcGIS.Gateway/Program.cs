@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Earth.ArcGIS.Gateway;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -7,51 +6,33 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var maxConcurrentConnections =
-    builder.Configuration.GetValue<long>("Protection:MaxConcurrentConnections", 1024);
-var maxRequestBodyBytes =
-    builder.Configuration.GetValue<long>("Protection:MaxRequestBodyBytes", 2 * 1024 * 1024);
-var maxRequestHeadersTotalSize =
-    builder.Configuration.GetValue("Protection:MaxRequestHeadersTotalSize", 32 * 1024);
-var maxRequestHeaderCount =
-    builder.Configuration.GetValue("Protection:MaxRequestHeaderCount", 64);
-var requestHeadersTimeoutSeconds =
-    builder.Configuration.GetValue("Protection:RequestHeadersTimeoutSeconds", 10);
-var maxConcurrentArcGisRequests =
-    builder.Configuration.GetValue("Protection:MaxConcurrentArcGisRequests", 64);
-var preAuthSourceTokenLimit =
-    builder.Configuration.GetValue("Protection:PreAuthSourceTokenLimit", 300);
-var preAuthSourceTokensPerMinute =
-    builder.Configuration.GetValue("Protection:PreAuthSourceTokensPerMinute", 300);
-var gatewayRequestTimeoutSeconds =
-    builder.Configuration.GetValue("Protection:GatewayRequestTimeoutSeconds", 45);
+var protection =
+    builder.Configuration.GetSection("Protection").Get<ProtectionOptions>()
+    ?? new ProtectionOptions();
+protection.Validate();
 
-if (maxConcurrentConnections <= 0 ||
-    maxRequestBodyBytes <= 0 ||
-    maxRequestHeadersTotalSize <= 0 ||
-    maxRequestHeaderCount <= 0 ||
-    requestHeadersTimeoutSeconds <= 0 ||
-    maxConcurrentArcGisRequests <= 0 ||
-    preAuthSourceTokenLimit <= 0 ||
-    preAuthSourceTokensPerMinute <= 0 ||
-    gatewayRequestTimeoutSeconds <= 0)
-{
-    throw new InvalidOperationException(
-        "Protection limits must all be positive.");
-}
+var gisCostOptions =
+    builder.Configuration.GetSection("GisCost").Get<GisCostOptions>()
+    ?? new GisCostOptions();
+gisCostOptions.Validate();
 
-var trustedProxies =
-    builder.Configuration.GetSection("Protection:TrustedProxies").Get<string[]>()
-    ?? Array.Empty<string>();
+var userRateOptions =
+    builder.Configuration.GetSection("UserRateLimit").Get<UserCentricRateLimitOptions>()
+    ?? new UserCentricRateLimitOptions();
+userRateOptions.Validate();
+
+var userConcurrencyOptions =
+    builder.Configuration.GetSection("UserConcurrency").Get<UserConcurrencyOptions>()
+    ?? new UserConcurrencyOptions();
+userConcurrencyOptions.Validate(protection.GatewayRequestTimeoutSeconds);
 
 var trustedProxyAddresses = new List<System.Net.IPAddress>();
-foreach (var configuredProxy in trustedProxies)
+foreach (var configuredProxy in protection.TrustedProxies)
 {
     if (string.IsNullOrWhiteSpace(configuredProxy))
         continue;
@@ -67,12 +48,12 @@ foreach (var configuredProxy in trustedProxies)
 
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {
-    serverOptions.Limits.MaxConcurrentConnections = maxConcurrentConnections;
-    serverOptions.Limits.MaxRequestBodySize = maxRequestBodyBytes;
-    serverOptions.Limits.MaxRequestHeadersTotalSize = maxRequestHeadersTotalSize;
-    serverOptions.Limits.MaxRequestHeaderCount = maxRequestHeaderCount;
+    serverOptions.Limits.MaxConcurrentConnections = protection.MaxConcurrentConnections;
+    serverOptions.Limits.MaxRequestBodySize = protection.MaxRequestBodyBytes;
+    serverOptions.Limits.MaxRequestHeadersTotalSize = protection.MaxRequestHeadersTotalSize;
+    serverOptions.Limits.MaxRequestHeaderCount = protection.MaxRequestHeaderCount;
     serverOptions.Limits.RequestHeadersTimeout =
-        TimeSpan.FromSeconds(requestHeadersTimeoutSeconds);
+        TimeSpan.FromSeconds(protection.RequestHeadersTimeoutSeconds);
 });
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
@@ -92,7 +73,7 @@ builder.Services.AddRequestTimeouts(options =>
         "arcgis-gateway",
         new RequestTimeoutPolicy
         {
-            Timeout = TimeSpan.FromSeconds(gatewayRequestTimeoutSeconds),
+            Timeout = TimeSpan.FromSeconds(protection.GatewayRequestTimeoutSeconds),
             TimeoutStatusCode = StatusCodes.Status504GatewayTimeout
         });
 });
@@ -105,12 +86,32 @@ builder.Services.AddOptions<GatewayOptions>()
 builder.Services.AddOptions<ApplicationOptions>()
     .Bind(builder.Configuration.GetSection("Applications"))
     .ValidateOnStart();
+builder.Services.AddOptions<ProtectionOptions>()
+    .Bind(builder.Configuration.GetSection("Protection"))
+    .Validate(options =>
+    {
+        try
+        {
+            options.Validate();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }, "Protection configuration is invalid.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton(protection);
+builder.Services.AddSingleton(gisCostOptions);
+builder.Services.AddSingleton(userRateOptions);
+builder.Services.AddSingleton(userConcurrencyOptions);
 builder.Services.AddSingleton<IApplicationIdentityResolver, ApplicationIdentityResolver>();
 builder.Services.AddSingleton<IArcGisResourceResolver, ArcGisResourceResolver>();
 builder.Services.AddSingleton<IArcGisOperationPolicy, ArcGisOperationPolicy>();
-builder.Services.AddSingleton<IRateCostPolicy, RateCostPolicy>();
+builder.Services.AddSingleton<IRequestActivityClassifier, RequestActivityClassifier>();
 builder.Services.AddSingleton<IArcGisUpstreamGate>(_ =>
-    new ArcGisUpstreamGate(maxConcurrentArcGisRequests));
+    new ArcGisUpstreamGate(protection.MaxConcurrentArcGisRequests));
 builder.Services.AddSingleton<AdminAuditStore>();
 builder.Services.AddSingleton<IConnectionMultiplexerAccessor, ConnectionMultiplexerAccessor>();
 
@@ -145,33 +146,21 @@ builder.Services.AddAntiforgery(options =>
     options.Cookie.Path = "/";
 });
 
-var rateLimitOptions = new GatewayRateLimitOptions
-{
-    BurstCapacity = builder.Configuration.GetValue("RateLimit:BurstCapacity", 240),
-    BurstWindowSeconds = builder.Configuration.GetValue("RateLimit:BurstWindowSeconds", 60),
-    SustainedCapacity = builder.Configuration.GetValue("RateLimit:SustainedCapacity", 1_800),
-    SustainedWindowSeconds = builder.Configuration.GetValue("RateLimit:SustainedWindowSeconds", 15 * 60),
-    DailyCapacity = builder.Configuration.GetValue("RateLimit:DailyCapacity", 20_000),
-    DailyWindowSeconds = builder.Configuration.GetValue("RateLimit:DailyWindowSeconds", 24 * 60 * 60)
-};
-rateLimitOptions.Validate();
-builder.Services.AddSingleton(rateLimitOptions);
-
 var redisConnection = builder.Configuration["Redis:ConnectionString"];
 if (string.IsNullOrWhiteSpace(redisConnection))
 {
     if (builder.Environment.IsProduction())
     {
         throw new InvalidOperationException(
-            "Redis:ConnectionString is required in Production so rate limits and user blocks remain distributed.");
+            "Redis:ConnectionString is required in Production so user rate limits, concurrency and blocks remain distributed.");
     }
 
-    builder.Services.AddSingleton<IGatewayRateLimiter, InMemoryGatewayRateLimiter>();
+    builder.Services.AddSingleton<IUserActivityRateLimiter, InMemoryUserActivityRateLimiter>();
+    builder.Services.AddSingleton<IUserConcurrencyGate, InMemoryUserConcurrencyGate>();
     builder.Services.AddSingleton<IUserBlockStore, UserBlockStore>();
 }
 else
 {
-    var redisOptions = new RedisRateLimitOptions { ConnectionString = redisConnection };
     var redisConfiguration = ConfigurationOptions.Parse(redisConnection);
     redisConfiguration.AbortOnConnectFail = false;
     redisConfiguration.ConnectRetry = 1;
@@ -179,12 +168,13 @@ else
     redisConfiguration.SyncTimeout = 1_000;
     redisConfiguration.AsyncTimeout = 1_000;
 
-    builder.Services.AddSingleton(redisOptions);
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
         ConnectionMultiplexer.Connect(redisConfiguration));
-    builder.Services.AddSingleton<IGatewayRateLimiter, RedisGatewayRateLimiter>();
+    builder.Services.AddSingleton<IUserActivityRateLimiter, RedisUserActivityRateLimiter>();
+    builder.Services.AddSingleton<IUserConcurrencyGate, RedisUserConcurrencyGate>();
     builder.Services.AddSingleton<IUserBlockStore, RedisUserBlockStore>();
 }
+
 builder.Services.AddHttpClient("access-policy", c => c.Timeout = TimeSpan.FromSeconds(2))
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
     {
@@ -224,6 +214,7 @@ else
     builder.Services.AddSingleton<ITelemetrySink, ResilientTelemetrySink>();
 }
 builder.Services.AddHostedService<TelemetryWorker>();
+
 builder.Services.AddHttpClient("arcgis-token", c => c.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
     {
@@ -260,7 +251,7 @@ builder.Services.AddHttpClient("arcgis", c => c.Timeout = TimeSpan.FromSeconds(3
             System.Net.DecompressionMethods.Deflate |
             System.Net.DecompressionMethods.Brotli,
         ConnectTimeout = TimeSpan.FromSeconds(5),
-        MaxConnectionsPerServer = 64,
+        MaxConnectionsPerServer = protection.MaxConcurrentArcGisRequests,
         MaxResponseHeadersLength = 64
     });
 
@@ -284,10 +275,8 @@ if (string.IsNullOrWhiteSpace(audience))
 
 builder.Services.AddAuthentication(options =>
     {
-        options.DefaultAuthenticateScheme =
-            JwtBearerDefaults.AuthenticationScheme;
-        options.DefaultChallengeScheme =
-            JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
     })
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, o =>
     {
@@ -337,12 +326,12 @@ builder.Services.AddAuthentication(options =>
                     ? JwtBearerDefaults.AuthenticationScheme
                     : AdminConsole.CookieScheme;
         });
+
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("earthid-user", policy =>
     {
-        policy.AddAuthenticationSchemes(
-            JwtBearerDefaults.AuthenticationScheme);
+        policy.AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme);
         policy.RequireAuthenticatedUser();
         policy.RequireAssertion(context =>
             EarthIdAuthentication.HasStableSubject(context.User));
@@ -350,8 +339,7 @@ builder.Services.AddAuthorization(options =>
 
     options.AddPolicy("gateway-admin", policy =>
     {
-        policy.AddAuthenticationSchemes(
-            AdminConsole.PolicyScheme);
+        policy.AddAuthenticationSchemes(AdminConsole.PolicyScheme);
         policy.RequireAuthenticatedUser();
         policy.RequireAssertion(context =>
             EarthIdAuthentication.HasStableSubject(context.User) &&
@@ -359,29 +347,32 @@ builder.Services.AddAuthorization(options =>
     });
 });
 
-builder.Services.AddRateLimiter(options =>
+if (protection.SourceRateLimit.Enabled)
 {
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        options.GlobalLimiter =
+            PartitionedRateLimiter.Create<HttpContext, string>(context =>
+            {
+                var source =
+                    context.Connection.RemoteIpAddress?.ToString()
+                    ?? "unknown";
 
-    options.GlobalLimiter =
-        PartitionedRateLimiter.Create<HttpContext, string>(context =>
-        {
-            var source =
-                context.Connection.RemoteIpAddress?.ToString()
-                ?? "unknown";
-
-            return RateLimitPartition.GetTokenBucketLimiter(
-                source,
-                _ => new TokenBucketRateLimiterOptions
-                {
-                    TokenLimit = preAuthSourceTokenLimit,
-                    TokensPerPeriod = preAuthSourceTokensPerMinute,
-                    ReplenishmentPeriod = TimeSpan.FromMinutes(1),
-                    AutoReplenishment = true,
-                    QueueLimit = 0
-                });
-        });
-});
+                return RateLimitPartition.GetTokenBucketLimiter(
+                    source,
+                    _ => new TokenBucketRateLimiterOptions
+                    {
+                        TokenLimit = protection.SourceRateLimit.TokenLimit,
+                        TokensPerPeriod = protection.SourceRateLimit.TokensPerPeriod,
+                        ReplenishmentPeriod = TimeSpan.FromSeconds(
+                            protection.SourceRateLimit.ReplenishmentPeriodSeconds),
+                        AutoReplenishment = true,
+                        QueueLimit = 0
+                    });
+            });
+    });
+}
 
 var app = builder.Build();
 app.UseForwardedHeaders();
@@ -411,7 +402,10 @@ app.Use(async (context, next) =>
 
     await next();
 });
-app.UseRateLimiter();
+
+if (protection.SourceRateLimit.Enabled)
+    app.UseRateLimiter();
+
 app.UseRequestTimeouts();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -436,6 +430,10 @@ app.MapGet("/health/ready", (
                 configured = redis is not null,
                 connected = redis?.IsConnected
             },
+            sourceRateLimit = new
+            {
+                enabled = protection.SourceRateLimit.Enabled
+            },
             telemetry = new
             {
                 accepted = telemetry.Accepted,
@@ -456,9 +454,12 @@ app.MapGet("/health/ready", (
 
 app.MapGet("/health", () => Results.Redirect("/health/ready"));
 
-app.MapMethods("/arcgis/{**path}", new[] { "GET", "POST" }, GatewayHandler.HandleAsync)
-   .RequireAuthorization("earthid-user")
-   .WithRequestTimeout("arcgis-gateway");
+app.MapMethods(
+        "/arcgis/{**path}",
+        new[] { "GET", "POST" },
+        GatewayHandler.HandleAsync)
+    .RequireAuthorization("earthid-user")
+    .WithRequestTimeout("arcgis-gateway");
 
 AdminConsole.MapRoutes(app);
 
