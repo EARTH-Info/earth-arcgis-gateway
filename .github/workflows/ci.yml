@@ -15,7 +15,7 @@ permissions:
 jobs:
   build-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       redis:
         image: redis:7.4-alpine
@@ -26,6 +26,16 @@ jobs:
           --health-interval 2s
           --health-timeout 2s
           --health-retries 10
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.8
+        ports:
+          - 8123:8123
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --query 'SELECT 1'"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v5
 
@@ -40,6 +50,15 @@ jobs:
       - name: Restore tests
         run: dotnet restore tests/Earth.ArcGIS.Gateway.Tests/Earth.ArcGIS.Gateway.Tests.csproj
 
+      - name: Initialize ClickHouse schema
+        run: |
+          curl --fail --silent --show-error \
+            --data-binary @deploy/clickhouse-schema.sql \
+            'http://localhost:8123/?multiquery=1'
+          curl --fail --silent --show-error \
+            --data-binary 'SELECT count() FROM system.tables WHERE database=currentDatabase() AND name IN (\"gateway_telemetry\",\"gateway_admin_audit\")' \
+            http://localhost:8123/
+
       - name: Build gateway
         run: dotnet build src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj --configuration Release --no-restore
 
@@ -49,5 +68,26 @@ jobs:
       - name: Build production container
         run: docker build --pull -t earth-arcgis-gateway:ci .
 
+      - name: Production container non-root smoke
+        run: |
+          test "$(docker image inspect earth-arcgis-gateway:ci --format '{{.Config.User}}')" = "gateway"
+          mkdir -p "$RUNNER_TEMP/gateway-spool"
+          chmod 0777 "$RUNNER_TEMP/gateway-spool"
+          docker run --rm \
+            --read-only \
+            --tmpfs /tmp \
+            -v "$RUNNER_TEMP/gateway-spool:/app/data/telemetry-spool" \
+            --entrypoint sh \
+            earth-arcgis-gateway:ci \
+            -c 'test -w /app/data/telemetry-spool && touch /app/data/telemetry-spool/runtime-smoke && rm /app/data/telemetry-spool/runtime-smoke'
+
       - name: Dependency vulnerability audit
         run: dotnet list src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj package --vulnerable --include-transitive
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: tests/Earth.ArcGIS.Gateway.Tests/TestResults/*.trx
+          if-no-files-found: warn
