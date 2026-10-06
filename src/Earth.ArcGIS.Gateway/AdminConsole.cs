@@ -19,18 +19,11 @@ public static class AdminConsole
 
     public static void MapRoutes(WebApplication app)
     {
-        app.MapGet("/admin/login", (
-            string? returnUrl) =>
+        app.MapGet("/admin/login", (string? returnUrl) =>
         {
-            var redirect = IsLocalReturnUrl(returnUrl)
-                ? returnUrl!
-                : "/admin";
-
+            var redirect = IsLocalReturnUrl(returnUrl) ? returnUrl! : "/admin";
             return Results.Challenge(
-                new AuthenticationProperties
-                {
-                    RedirectUri = redirect
-                },
+                new AuthenticationProperties { RedirectUri = redirect },
                 [OidcScheme]);
         }).AllowAnonymous();
 
@@ -49,24 +42,19 @@ public static class AdminConsole
 
             await context.SignOutAsync(CookieScheme);
             return Results.Redirect("/admin/login");
-        }).RequireAuthorization("gateway-admin");
+        }).RequireAuthorization("gateway-viewer");
 
         var group = app.MapGroup("/admin")
-            .RequireAuthorization("gateway-admin");
+            .RequireAuthorization("gateway-viewer");
 
         group.MapGet("", (
             HttpContext context,
             IAntiforgery antiforgery) =>
         {
             var tokens = antiforgery.GetAndStoreTokens(context);
-            var tokenJson = JsonSerializer.Serialize(
-                tokens.RequestToken ?? string.Empty);
-
+            var tokenJson = JsonSerializer.Serialize(tokens.RequestToken ?? string.Empty);
             return Results.Content(
-                Html.Replace(
-                    "__CSRF_TOKEN_JSON__",
-                    tokenJson,
-                    StringComparison.Ordinal),
+                Html.Replace("__CSRF_TOKEN_JSON__", tokenJson, StringComparison.Ordinal),
                 "text/html; charset=utf-8");
         });
 
@@ -123,16 +111,12 @@ public static class AdminConsole
                     clientIds = x.Value.ClientIds,
                     accessApiHost = TryHost(x.Value.AccessApiAuthorizeUrl)
                 });
-
             return Results.Ok(result);
         });
 
         group.MapGet("/api/resources", (
             IOptions<GatewayOptions> options) =>
-            Results.Ok(options.Value.AllowedPathPrefixes.Select(prefix => new
-            {
-                prefix
-            })));
+            Results.Ok(options.Value.AllowedPathPrefixes.Select(prefix => new { prefix })));
 
         group.MapGet("/api/rate-profiles", (
             UserCentricRateLimitOptions rate,
@@ -241,7 +225,6 @@ public static class AdminConsole
                     x.StatusCode >= 400)
                 .Take(max)
                 .ToArray();
-
             return Results.Ok(events);
         });
 
@@ -284,34 +267,37 @@ public static class AdminConsole
             ILoggerFactory loggerFactory) =>
         {
             if (!await ValidateMutationAsync(context, antiforgery))
-            {
-                return Results.BadRequest(new
-                {
-                    error = "invalid antiforgery token"
-                });
-            }
+                return Results.BadRequest(new { error = "invalid antiforgery token" });
 
             if (string.IsNullOrWhiteSpace(request.EarthIdSub) ||
                 string.IsNullOrWhiteSpace(request.Reason))
             {
-                return Results.BadRequest(new
-                {
-                    error = "earthIdSub and reason are required"
-                });
+                return Results.BadRequest(new { error = "earthIdSub and reason are required" });
             }
 
             if (request.Minutes is <= 0 or > 10_080)
-            {
-                return Results.BadRequest(new
-                {
-                    error = "minutes must be between 1 and 10080 when supplied"
-                });
-            }
+                return Results.BadRequest(new { error = "minutes must be between 1 and 10080 when supplied" });
 
             var adminSubject = context.User.FindFirstValue("sub") ?? "unknown";
             TimeSpan? duration = request.Minutes is null
                 ? null
                 : TimeSpan.FromMinutes(request.Minutes.Value);
+            var planned = UserBlockStore.CreateBlock(
+                request.EarthIdSub,
+                request.Reason,
+                adminSubject,
+                duration);
+
+            await audit.AddAsync(
+                new AdminEnforcementEvent(
+                    planned.CreatedAt,
+                    adminSubject,
+                    "BLOCK_REQUESTED",
+                    planned.EarthIdSub,
+                    planned.Reason,
+                    planned.ExpiresAt,
+                    context.TraceIdentifier),
+                context.RequestAborted);
 
             var block = await blocks.BlockAsync(
                 request.EarthIdSub,
@@ -320,27 +306,28 @@ public static class AdminConsole
                 duration,
                 context.RequestAborted);
 
-            var auditEvent = new AdminEnforcementEvent(
-                DateTimeOffset.UtcNow,
-                adminSubject,
-                "BLOCK",
-                block.EarthIdSub,
-                block.Reason,
-                block.ExpiresAt,
-                context.TraceIdentifier);
-            await audit.AddAsync(auditEvent, context.RequestAborted);
+            await audit.AddAsync(
+                new AdminEnforcementEvent(
+                    DateTimeOffset.UtcNow,
+                    adminSubject,
+                    "BLOCK_APPLIED",
+                    block.EarthIdSub,
+                    block.Reason,
+                    block.ExpiresAt,
+                    context.TraceIdentifier),
+                context.RequestAborted);
 
             loggerFactory.CreateLogger("AdminAudit").LogWarning(
                 "admin_enforcement_change admin_sub={AdminSubject} action={Action} target_sub={TargetSubject} reason={Reason} expires_at={ExpiresAt} correlation_id={CorrelationId}",
                 adminSubject,
-                "BLOCK",
+                "BLOCK_APPLIED",
                 block.EarthIdSub,
                 block.Reason,
                 block.ExpiresAt,
                 context.TraceIdentifier);
 
             return Results.Ok(block);
-        });
+        }).RequireAuthorization("gateway-security-operator");
 
         group.MapDelete("/api/blocks/{earthIdSub}", async (
             string earthIdSub,
@@ -351,27 +338,34 @@ public static class AdminConsole
             ILoggerFactory loggerFactory) =>
         {
             if (!await ValidateMutationAsync(context, antiforgery))
-            {
-                return Results.BadRequest(new
-                {
-                    error = "invalid antiforgery token"
-                });
-            }
+                return Results.BadRequest(new { error = "invalid antiforgery token" });
 
             var adminSubject = context.User.FindFirstValue("sub") ?? "unknown";
+            await audit.AddAsync(
+                new AdminEnforcementEvent(
+                    DateTimeOffset.UtcNow,
+                    adminSubject,
+                    "UNBLOCK_REQUESTED",
+                    earthIdSub,
+                    "manual_unblock",
+                    null,
+                    context.TraceIdentifier),
+                context.RequestAborted);
+
             var removed = await blocks.UnblockAsync(
                 earthIdSub,
                 context.RequestAborted);
 
-            var auditEvent = new AdminEnforcementEvent(
-                DateTimeOffset.UtcNow,
-                adminSubject,
-                "UNBLOCK",
-                earthIdSub,
-                removed ? "manual_unblock" : "not_found",
-                null,
-                context.TraceIdentifier);
-            await audit.AddAsync(auditEvent, context.RequestAborted);
+            await audit.AddAsync(
+                new AdminEnforcementEvent(
+                    DateTimeOffset.UtcNow,
+                    adminSubject,
+                    removed ? "UNBLOCK_APPLIED" : "UNBLOCK_NOT_FOUND",
+                    earthIdSub,
+                    removed ? "manual_unblock" : "not_found",
+                    null,
+                    context.TraceIdentifier),
+                context.RequestAborted);
 
             loggerFactory.CreateLogger("AdminAudit").LogWarning(
                 "admin_enforcement_change admin_sub={AdminSubject} action={Action} target_sub={TargetSubject} result={Result} correlation_id={CorrelationId}",
@@ -384,7 +378,51 @@ public static class AdminConsole
             return removed
                 ? Results.NoContent()
                 : Results.NotFound(new { error = "block not found" });
-        });
+        }).RequireAuthorization("gateway-security-operator");
+
+        group.MapPost("/api/policy-cache/{applicationId}/invalidate", async (
+            string applicationId,
+            HttpContext context,
+            IAccessPolicyCache cache,
+            IOptions<ApplicationOptions> applications,
+            IAdminAuditStore audit,
+            IAntiforgery antiforgery) =>
+        {
+            if (!await ValidateMutationAsync(context, antiforgery))
+                return Results.BadRequest(new { error = "invalid antiforgery token" });
+
+            if (!applications.Value.Registrations.ContainsKey(applicationId))
+                return Results.NotFound(new { error = "application not found" });
+
+            var adminSubject = context.User.FindFirstValue("sub") ?? "unknown";
+            await audit.AddAsync(
+                new AdminEnforcementEvent(
+                    DateTimeOffset.UtcNow,
+                    adminSubject,
+                    "POLICY_CACHE_INVALIDATE_REQUESTED",
+                    applicationId,
+                    "administrative_invalidation",
+                    null,
+                    context.TraceIdentifier),
+                context.RequestAborted);
+
+            var generation = await cache.InvalidateApplicationAsync(
+                applicationId,
+                context.RequestAborted);
+
+            await audit.AddAsync(
+                new AdminEnforcementEvent(
+                    DateTimeOffset.UtcNow,
+                    adminSubject,
+                    "POLICY_CACHE_INVALIDATED",
+                    applicationId,
+                    $"generation:{generation}",
+                    null,
+                    context.TraceIdentifier),
+                context.RequestAborted);
+
+            return Results.Ok(new { applicationId, generation });
+        }).RequireAuthorization("gateway-admin");
     }
 
     private static bool IsLocalReturnUrl(string? value) =>
@@ -413,9 +451,7 @@ public static class AdminConsole
     }
 
     private static string? TryHost(string? value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri)
-            ? uri.Host
-            : null;
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri.Host : null;
 
     private const string Html = """
 <!doctype html>
@@ -484,7 +520,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 function table(items,cols){
  if(!items.length)return '<span class="muted">No records</span>';
  return '<table><thead><tr>'+cols.map(c=>'<th>'+esc(c[0])+'</th>').join('')+'</tr></thead><tbody>'+
- items.map(x=>'<tr>'+cols.map(c=>'<td>'+esc(c[1](x))+'</td>').join('')+'</tbody></table>';
+ items.map(x=>'<tr>'+cols.map(c=>'<td>'+esc(c[1](x))+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
 }
 async function refresh(){
  const [o,t,s,b,a,r,apps,res]=await Promise.all([
