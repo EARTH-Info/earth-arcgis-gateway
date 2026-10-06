@@ -37,6 +37,18 @@ public sealed class GatewayOptionsTests
     }
 
     [Fact]
+    public void RefreshSkewMustBeLessThanRequestedFederatedTokenLifetime()
+    {
+        var options = ValidFederatedOptions();
+        options.TokenExpirationMinutes = 1;
+        options.RefreshSkewSeconds = 60;
+
+        var result = new GatewayOptionsValidator().Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
     public void CanonicalEncodedSpaceInAllowedPrefixIsAccepted()
     {
         var options = ValidFederatedOptions();
