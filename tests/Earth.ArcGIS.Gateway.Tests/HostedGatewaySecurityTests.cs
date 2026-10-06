@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Text;
 using Earth.ArcGIS.Gateway;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -230,6 +231,14 @@ public sealed class HostedGatewaySecurityTests
                         options.TokenValidationParameters.IssuerSigningKey = SigningKey;
                     });
 
+                services.PostConfigure<OpenIdConnectOptions>(
+                    AdminConsole.OidcScheme,
+                    options =>
+                    {
+                        options.ClientId = "gateway-admin-test-client";
+                        options.ClientSecret = "gateway-admin-test-secret";
+                    });
+
                 services.RemoveAll<IAccessPolicyClient>();
                 services.AddSingleton<IAccessPolicyClient>(Access);
 
@@ -237,9 +246,6 @@ public sealed class HostedGatewaySecurityTests
                 services.AddSingleton<IArcGisCredentialProvider>(
                     new StaticCredentialProvider());
 
-                // Preserve the framework IHttpClientFactory because authentication
-                // and other middleware depend on it. Override only the ArcGIS named
-                // client used by the gateway upstream path.
                 services.AddHttpClient("arcgis")
                     .ConfigurePrimaryHttpMessageHandler(() => ArcGis);
             });
