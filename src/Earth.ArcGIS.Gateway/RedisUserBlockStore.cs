@@ -57,23 +57,22 @@ public sealed class RedisUserBlockStore(
         var json = JsonSerializer.Serialize(block, JsonOptions);
         var field = HashSubject(block.EarthIdSub);
         var db = redis.GetDatabase();
+        var transaction = db.CreateTransaction();
 
-        var stored = duration is null
-            ? await db.StringSetAsync(
-                    KeyPrefix + field,
-                    json)
-                .WaitAsync(cancellationToken)
-            : await db.StringSetAsync(
-                    KeyPrefix + field,
-                    json,
-                    duration.Value)
-                .WaitAsync(cancellationToken);
+        var setTask = duration is null
+            ? transaction.StringSetAsync(KeyPrefix + field, json)
+            : transaction.StringSetAsync(KeyPrefix + field, json, duration.Value);
+        var indexTask = transaction.HashSetAsync(IndexKey, field, json);
 
+        var committed = await transaction.ExecuteAsync()
+            .WaitAsync(cancellationToken);
+        if (!committed)
+            throw new InvalidOperationException("Unable to atomically persist distributed user block.");
+
+        var stored = await setTask.WaitAsync(cancellationToken);
+        _ = await indexTask.WaitAsync(cancellationToken);
         if (!stored)
             throw new InvalidOperationException("Unable to persist distributed user block.");
-
-        await db.HashSetAsync(IndexKey, field, json)
-            .WaitAsync(cancellationToken);
 
         return block;
     }
@@ -86,12 +85,17 @@ public sealed class RedisUserBlockStore(
 
         var db = redis.GetDatabase();
         var field = HashSubject(earthIdSub);
+        var transaction = db.CreateTransaction();
+        var keyDeleteTask = transaction.KeyDeleteAsync(KeyPrefix + field);
+        var indexDeleteTask = transaction.HashDeleteAsync(IndexKey, field);
 
-        var keyDeleted = await db.KeyDeleteAsync(KeyPrefix + field)
+        var committed = await transaction.ExecuteAsync()
             .WaitAsync(cancellationToken);
-        var indexDeleted = await db.HashDeleteAsync(IndexKey, field)
-            .WaitAsync(cancellationToken);
+        if (!committed)
+            throw new InvalidOperationException("Unable to atomically remove distributed user block.");
 
+        var keyDeleted = await keyDeleteTask.WaitAsync(cancellationToken);
+        var indexDeleted = await indexDeleteTask.WaitAsync(cancellationToken);
         return keyDeleted || indexDeleted;
     }
 
@@ -136,18 +140,21 @@ public sealed class RedisUserBlockStore(
         string field,
         CancellationToken cancellationToken)
     {
-        await db.KeyDeleteAsync(KeyPrefix + field)
+        var transaction = db.CreateTransaction();
+        var keyDeleteTask = transaction.KeyDeleteAsync(KeyPrefix + field);
+        var indexDeleteTask = transaction.HashDeleteAsync(IndexKey, field);
+        var committed = await transaction.ExecuteAsync()
             .WaitAsync(cancellationToken);
-        await db.HashDeleteAsync(IndexKey, field)
-            .WaitAsync(cancellationToken);
+        if (!committed)
+            throw new InvalidOperationException("Unable to atomically remove expired user block.");
+        _ = await keyDeleteTask.WaitAsync(cancellationToken);
+        _ = await indexDeleteTask.WaitAsync(cancellationToken);
     }
 
     private static string HashSubject(string earthIdSub)
     {
         if (string.IsNullOrWhiteSpace(earthIdSub))
-            throw new ArgumentException(
-                "EarthID subject is required.",
-                nameof(earthIdSub));
+            throw new ArgumentException("EarthID subject is required.", nameof(earthIdSub));
 
         return Convert.ToHexString(
             SHA256.HashData(
@@ -158,17 +165,12 @@ public sealed class RedisUserBlockStore(
     {
         try
         {
-            return JsonSerializer.Deserialize<UserBlock>(
-                       value.ToString(),
-                       JsonOptions)
-                   ?? throw new InvalidOperationException(
-                       "Distributed user block payload is empty.");
+            return JsonSerializer.Deserialize<UserBlock>(value.ToString(), JsonOptions)
+                   ?? throw new InvalidOperationException("Distributed user block payload is empty.");
         }
         catch (JsonException ex)
         {
-            throw new InvalidOperationException(
-                "Distributed user block payload is invalid.",
-                ex);
+            throw new InvalidOperationException("Distributed user block payload is invalid.", ex);
         }
     }
 }
