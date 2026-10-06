@@ -60,6 +60,27 @@ public sealed class RedisUserActivityRateLimiterTests
             Key(id, 1), Activity(1), CancellationToken.None)).Allowed);
     }
 
+    [Fact]
+    public async Task OperationCasingCannotSplitRedisResourceBudget()
+    {
+        using var redis = await ConnectAsync();
+        var limiter = Create(redis, burst: 20, refill: 20, resource: 2);
+        var id = Guid.NewGuid().ToString("N");
+
+        Assert.True((await limiter.ConsumeAsync(
+            Key(id, 0, operation: "query"),
+            Activity(2),
+            CancellationToken.None)).Allowed);
+
+        var denied = await limiter.ConsumeAsync(
+            Key(id, 0, operation: "QuErY"),
+            Activity(1),
+            CancellationToken.None);
+
+        Assert.False(denied.Allowed);
+        Assert.Equal("resource_budget_exceeded", denied.ReasonCode);
+    }
+
     private static RedisUserActivityRateLimiter Create(
         IConnectionMultiplexer redis,
         int burst,
@@ -88,14 +109,15 @@ public sealed class RedisUserActivityRateLimiterTests
     private static UserActivityRateKey Key(
         string id,
         int layer,
-        string subject = "sub-1") =>
+        string subject = "sub-1",
+        string operation = "query") =>
         new(
             subject + "-" + id,
             "tenant-1",
             "jtuwma",
             "Land/Parcels",
             layer,
-            "query");
+            operation);
 
     private static RequestActivity Activity(int units) =>
         new(
