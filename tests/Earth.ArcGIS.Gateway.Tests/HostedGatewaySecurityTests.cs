@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
@@ -132,10 +133,7 @@ public sealed class HostedGatewaySecurityTests
             TestContext.Current.CancellationToken);
 
         await AssertStatusAsync(HttpStatusCode.Redirect, response);
-        Assert.StartsWith(
-            "/admin/login",
-            response.Headers.Location?.OriginalString,
-            StringComparison.Ordinal);
+        Assert.Equal("/admin/login", response.Headers.Location?.AbsolutePath);
     }
 
     private static async Task AssertStatusAsync(
@@ -208,8 +206,6 @@ public sealed class HostedGatewaySecurityTests
                     ["Applications:Registrations:jtuwma:Audiences:0"] = Audience,
                     ["Applications:Registrations:jtuwma:ClientIds:0"] = "jtuwma-web",
                     ["Applications:Registrations:jtuwma:AccessApiAuthorizeUrl"] = "https://policy.test/authorize",
-                    ["Admin:OidcClientId"] = "gateway-admin-test-client",
-                    ["Admin:OidcClientSecret"] = "gateway-admin-test-secret",
                     ["Protection:SourceRateLimit:Enabled"] = "false"
                 };
                 configuration.AddInMemoryCollection(values);
@@ -227,8 +223,19 @@ public sealed class HostedGatewaySecurityTests
                         };
                         oidc.SigningKeys.Add(SigningKey);
                         options.Configuration = oidc;
-                        options.TokenValidationParameters.ValidIssuer = Issuer;
-                        options.TokenValidationParameters.IssuerSigningKey = SigningKey;
+                        options.ConfigurationManager =
+                            new StaticConfigurationManager<OpenIdConnectConfiguration>(oidc);
+                        options.TokenValidationParameters = new TokenValidationParameters
+                        {
+                            ValidateIssuer = true,
+                            ValidIssuer = Issuer,
+                            ValidateAudience = true,
+                            ValidAudience = Audience,
+                            ValidateLifetime = true,
+                            ValidateIssuerSigningKey = true,
+                            IssuerSigningKey = SigningKey,
+                            ClockSkew = TimeSpan.FromMinutes(1)
+                        };
                     });
 
                 services.PostConfigure<OpenIdConnectOptions>(
