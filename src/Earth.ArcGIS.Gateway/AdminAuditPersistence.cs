@@ -117,7 +117,8 @@ public sealed class ClickHouseAdminAuditStore(
         {
             $"database={Uri.EscapeDataString(cfg.Database)}",
             $"query={Uri.EscapeDataString(sql)}",
-            "date_time_input_format=best_effort"
+            "date_time_input_format=best_effort",
+            "date_time_output_format=iso"
         };
         if (limit is not null)
             parts.Add($"param_limit={limit.Value}");
