@@ -220,12 +220,13 @@ public sealed class HostedAdminSecurityTests
             CancellationToken cancellationToken)
         {
             BlockCalls++;
-            return ValueTask.FromResult(
-                UserBlockStore.CreateBlock(
-                    earthIdSub,
-                    reason,
-                    adminSubject,
-                    duration));
+            var now = DateTimeOffset.UtcNow;
+            return ValueTask.FromResult(new UserBlock(
+                earthIdSub.Trim(),
+                reason.Trim(),
+                adminSubject.Trim(),
+                now,
+                duration is null ? null : now.Add(duration.Value)));
         }
 
         public ValueTask<bool> UnblockAsync(
