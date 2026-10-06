@@ -107,6 +107,26 @@ public sealed class UserCentricRateLimiterTests
         Assert.True((await limiter.ConsumeAsync(Key(1), Activity(1), CancellationToken.None)).Allowed);
     }
 
+    [Fact]
+    public async Task OperationCasingCannotSplitResourceBudget()
+    {
+        var limiter = new InMemoryUserActivityRateLimiter(
+            Options(burst: 100, refill: 100, resource: 2));
+
+        Assert.True((await limiter.ConsumeAsync(
+            Key(0, operation: "query"),
+            Activity(2),
+            CancellationToken.None)).Allowed);
+
+        var denied = await limiter.ConsumeAsync(
+            Key(0, operation: "QuErY"),
+            Activity(1),
+            CancellationToken.None);
+
+        Assert.False(denied.Allowed);
+        Assert.Equal("resource_budget_exceeded", denied.ReasonCode);
+    }
+
     private static UserCentricRateLimitOptions Options(
         int burst,
         int refill,
@@ -125,14 +145,15 @@ public sealed class UserCentricRateLimiterTests
 
     private static UserActivityRateKey Key(
         int layer,
-        string subject = "sub-1") =>
+        string subject = "sub-1",
+        string operation = "query") =>
         new(
             subject,
             "tenant-1",
             "jtuwma",
             "Land/Parcels",
             layer,
-            "query");
+            operation);
 
     private static RequestActivity Activity(int units) =>
         new(
