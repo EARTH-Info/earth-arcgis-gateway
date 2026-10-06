@@ -8,25 +8,43 @@ public sealed class TelemetryQueueTests
     public void WriteIsNonBlockingAndAcceptsEvent()
     {
         var queue = new TelemetryQueue();
-        var item = new TelemetryEvent(DateTimeOffset.UtcNow, "sub", null, "jtuwma",
-            "Land/Parcels", "FeatureServer", 0, "query", "GET", 200, 10,
-            "ALLOW", "policy_allow", "v1", "cid");
+        var item = Event("cid");
 
         Assert.True(queue.TryWrite(item));
+        Assert.Contains(queue.GetRecent(10), x => x.CorrelationId == "cid");
     }
+
     [Fact]
-    public void FullQueueRejectsAndCountsDrop()
+    public void FullQueueRejectsCountsDropAndDoesNotExposeDroppedEventAsRecent()
     {
         var queue = new TelemetryQueue();
-        var item = new TelemetryEvent(DateTimeOffset.UtcNow, "sub", null, "jtuwma",
-            "Land/Parcels", "FeatureServer", 0, "query", "GET", 200, 10,
-            "ALLOW", "policy_allow", "v1", "cid");
 
         for (var i = 0; i < 10_000; i++)
-            Assert.True(queue.TryWrite(item));
+            Assert.True(queue.TryWrite(Event("accepted-" + i)));
 
-        Assert.False(queue.TryWrite(item));
+        Assert.False(queue.TryWrite(Event("dropped")));
         Assert.Equal(10_000, queue.Accepted);
         Assert.Equal(1, queue.Dropped);
+        Assert.DoesNotContain(
+            queue.GetRecent(1000),
+            x => x.CorrelationId == "dropped");
     }
+
+    private static TelemetryEvent Event(string correlationId) =>
+        new(
+            DateTimeOffset.UtcNow,
+            "sub",
+            null,
+            "jtuwma",
+            "Land/Parcels",
+            "FeatureServer",
+            0,
+            "query",
+            "GET",
+            200,
+            10,
+            "ALLOW",
+            "policy_allow",
+            "v1",
+            correlationId);
 }
