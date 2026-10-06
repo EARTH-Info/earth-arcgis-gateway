@@ -63,17 +63,18 @@ public sealed class RequestActivityClassifier(GisCostOptions options)
         IQueryCollection query,
         IReadOnlyDictionary<string, StringValues>? form)
     {
-        if (IsTrue(query, form, "returnCountOnly"))
-            return Activity("query_count", options.CountOnly, false, false, false, false, query, form);
-
-        if (IsTrue(query, form, "returnIdsOnly"))
-            return Activity("query_ids", options.IdsOnly, false, false, false, false, query, form);
-
-        if (IsTrue(query, form, "returnExtentOnly"))
-            return Activity("query_extent", options.ExtentOnly, false, false, false, false, query, form);
-
         var spatial = HasKey(query, form, "geometry");
-        var explicitNoGeometry = IsFalse(query, form, "returnGeometry");
+
+        if (IsUnambiguouslyTrue(query, form, "returnCountOnly"))
+            return CheapQuery("query_count", options.CountOnly, spatial, query, form);
+
+        if (IsUnambiguouslyTrue(query, form, "returnIdsOnly"))
+            return CheapQuery("query_ids", options.IdsOnly, spatial, query, form);
+
+        if (IsUnambiguouslyTrue(query, form, "returnExtentOnly"))
+            return CheapQuery("query_extent", options.ExtentOnly, spatial, query, form);
+
+        var explicitNoGeometry = IsUnambiguouslyFalse(query, form, "returnGeometry");
         var returnsGeometry = !explicitNoGeometry;
         var allFields = Values(query, form, "outFields")
             .Any(value => string.Equals(value?.Trim(), "*", StringComparison.Ordinal));
@@ -114,6 +115,25 @@ public sealed class RequestActivityClassifier(GisCostOptions options)
             paged,
             heavy,
             extractionLike,
+            BuildFingerprint(query, form));
+    }
+
+    private RequestActivity CheapQuery(
+        string activityClass,
+        int baseCost,
+        bool spatial,
+        IQueryCollection query,
+        IReadOnlyDictionary<string, StringValues>? form)
+    {
+        var units = baseCost + (spatial ? options.SpatialSurcharge : 0);
+        return new RequestActivity(
+            spatial ? activityClass + "_spatial" : activityClass,
+            units,
+            spatial,
+            false,
+            false,
+            units >= options.HeavyThreshold,
+            false,
             BuildFingerprint(query, form));
     }
 
@@ -164,19 +184,25 @@ public sealed class RequestActivityClassifier(GisCostOptions options)
         query.ContainsKey(key) ||
         (form?.ContainsKey(key) ?? false);
 
-    private static bool IsTrue(
+    private static bool IsUnambiguouslyTrue(
         IQueryCollection query,
         IReadOnlyDictionary<string, StringValues>? form,
-        string key) =>
-        Values(query, form, key).Any(value =>
-            string.Equals(value, "true", StringComparison.OrdinalIgnoreCase));
+        string key)
+    {
+        var values = Values(query, form, key).ToArray();
+        return values.Any(value => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)) &&
+               !values.Any(value => string.Equals(value, "false", StringComparison.OrdinalIgnoreCase));
+    }
 
-    private static bool IsFalse(
+    private static bool IsUnambiguouslyFalse(
         IQueryCollection query,
         IReadOnlyDictionary<string, StringValues>? form,
-        string key) =>
-        Values(query, form, key).Any(value =>
-            string.Equals(value, "false", StringComparison.OrdinalIgnoreCase));
+        string key)
+    {
+        var values = Values(query, form, key).ToArray();
+        return values.Any(value => string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)) &&
+               !values.Any(value => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static IEnumerable<string?> Values(
         IQueryCollection query,
