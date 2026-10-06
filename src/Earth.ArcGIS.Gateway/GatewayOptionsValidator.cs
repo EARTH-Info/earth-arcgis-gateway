@@ -33,7 +33,14 @@ public sealed class GatewayOptionsValidator : IValidateOptions<GatewayOptions>
                 if (string.IsNullOrWhiteSpace(options.Password))
                     errors.Add("Gateway:Password is required for federated-11.3.");
                 if (options.TokenExpirationMinutes <= 0)
+                {
                     errors.Add("Gateway:TokenExpirationMinutes must be positive.");
+                }
+                else if (options.RefreshSkewSeconds >= options.TokenExpirationMinutes * 60)
+                {
+                    errors.Add(
+                        "Gateway:RefreshSkewSeconds must be less than the configured token lifetime.");
+                }
                 break;
 
             case "oauth-11.5":
