@@ -113,7 +113,9 @@ public sealed class ClickHouseIntegrationTests
             1000,
             TestContext.Current.CancellationToken);
 
-        var actual = Assert.Single(rows.Where(x => x.CorrelationId == correlation));
+        var actual = Assert.Single(
+            rows,
+            x => x.CorrelationId == correlation);
         Assert.Equal(expected.AdminSubject, actual.AdminSubject);
         Assert.Equal(expected.TargetSubject, actual.TargetSubject);
         Assert.Equal(expected.Action, actual.Action);
