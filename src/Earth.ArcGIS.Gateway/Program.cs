@@ -31,6 +31,13 @@ var userConcurrencyOptions =
     ?? new UserConcurrencyOptions();
 userConcurrencyOptions.Validate(protection.GatewayRequestTimeoutSeconds);
 
+var telemetryOptions =
+    builder.Configuration.GetSection("Telemetry").Get<TelemetryPersistenceOptions>()
+    ?? new TelemetryPersistenceOptions();
+TelemetryPersistenceValidator.Validate(
+    telemetryOptions,
+    builder.Environment.IsProduction());
+
 var trustedProxyAddresses = new List<System.Net.IPAddress>();
 foreach (var configuredProxy in protection.TrustedProxies)
 {
@@ -114,15 +121,9 @@ builder.Services.AddSingleton<IArcGisUpstreamGate>(_ =>
     new ArcGisUpstreamGate(protection.MaxConcurrentArcGisRequests));
 builder.Services.AddSingleton<IConnectionMultiplexerAccessor, ConnectionMultiplexerAccessor>();
 
-var adminOptions = new AdminOptions
-{
-    AllowedSubjects =
-        builder.Configuration.GetSection("Admin:AllowedSubjects").Get<string[]>() ?? Array.Empty<string>(),
-    AllowedRoles =
-        builder.Configuration.GetSection("Admin:AllowedRoles").Get<string[]>() ?? ["gateway-admin"],
-    RecentTelemetryLimit =
-        builder.Configuration.GetValue("Admin:RecentTelemetryLimit", 500)
-};
+var adminOptions =
+    builder.Configuration.GetSection("Admin").Get<AdminOptions>()
+    ?? new AdminOptions();
 builder.Services.AddSingleton(adminOptions);
 
 var adminOidcClientId = builder.Configuration["Admin:OidcClientId"];
@@ -191,15 +192,9 @@ builder.Services.Configure<TelemetryPersistenceOptions>(
 builder.Services.AddSingleton<TelemetryPersistenceHealth>();
 builder.Services.AddSingleton<FileTelemetrySpool>();
 
-var clickHouseBaseUrl = builder.Configuration["Telemetry:ClickHouseBaseUrl"];
+var clickHouseBaseUrl = telemetryOptions.ClickHouseBaseUrl;
 if (string.IsNullOrWhiteSpace(clickHouseBaseUrl))
 {
-    if (builder.Environment.IsProduction())
-    {
-        throw new InvalidOperationException(
-            "Telemetry:ClickHouseBaseUrl is required in Production so audit telemetry remains durable.");
-    }
-
     builder.Services.AddSingleton<ITelemetrySink, LoggingTelemetrySink>();
     builder.Services.AddSingleton<IAuditQueryStore, RecentAuditQueryStore>();
     builder.Services.AddSingleton<IAdminAuditStore, AdminAuditStore>();
@@ -343,14 +338,25 @@ builder.Services.AddAuthorization(options =>
             EarthIdAuthentication.HasStableSubject(context.User));
     });
 
-    options.AddPolicy("gateway-admin", policy =>
+    foreach (var (name, requiredLevel) in new[]
     {
-        policy.AddAuthenticationSchemes(AdminConsole.PolicyScheme);
-        policy.RequireAuthenticatedUser();
-        policy.RequireAssertion(context =>
-            EarthIdAuthentication.HasStableSubject(context.User) &&
-            AdminAuthorization.IsAuthorized(context.User, adminOptions));
-    });
+        ("gateway-viewer", AdminAccessLevel.Viewer),
+        ("gateway-security-operator", AdminAccessLevel.SecurityOperator),
+        ("gateway-admin", AdminAccessLevel.Administrator)
+    })
+    {
+        options.AddPolicy(name, policy =>
+        {
+            policy.AddAuthenticationSchemes(AdminConsole.PolicyScheme);
+            policy.RequireAuthenticatedUser();
+            policy.RequireAssertion(context =>
+                EarthIdAuthentication.HasStableSubject(context.User) &&
+                AdminAuthorization.IsAuthorized(
+                    context.User,
+                    adminOptions,
+                    requiredLevel));
+        });
+    }
 });
 
 if (protection.SourceRateLimit.Enabled)
@@ -361,10 +367,7 @@ if (protection.SourceRateLimit.Enabled)
         options.GlobalLimiter =
             PartitionedRateLimiter.Create<HttpContext, string>(context =>
             {
-                var source =
-                    context.Connection.RemoteIpAddress?.ToString()
-                    ?? "unknown";
-
+                var source = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
                 return RateLimitPartition.GetTokenBucketLimiter(
                     source,
                     _ => new TokenBucketRateLimiterOptions
@@ -426,7 +429,17 @@ app.MapGet("/health/ready", (
 {
     var redis = services.GetService<IConnectionMultiplexer>();
     var redisReady = redis is null || redis.IsConnected;
-    var status = redisReady ? "ready" : "degraded";
+    var telemetryDegraded =
+        telemetry.Dropped > 0 ||
+        persistence.DroppedSpoolBatches > 0 ||
+        (persistence.LastFailure is not null &&
+         (persistence.LastSuccess is null ||
+          persistence.LastFailure > persistence.LastSuccess));
+    var status = !redisReady
+        ? "unready"
+        : telemetryDegraded
+            ? "degraded"
+            : "ready";
 
     return Results.Json(
         new
