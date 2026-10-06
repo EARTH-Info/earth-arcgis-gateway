@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Earth.ArcGIS.Gateway;
 
 public sealed record ArcGisResource(
@@ -16,16 +18,17 @@ public interface IArcGisResourceResolver
 
 public sealed class ArcGisResourceResolver : IArcGisResourceResolver
 {
+    private static readonly string[] CanonicalServiceTypes =
+    [
+        "FeatureServer",
+        "MapServer",
+        "SceneServer",
+        "ImageServer",
+        "VectorTileServer"
+    ];
+
     private static readonly HashSet<string> ServiceTypes =
-        new(
-        [
-            "FeatureServer",
-            "MapServer",
-            "SceneServer",
-            "ImageServer",
-            "VectorTileServer"
-        ],
-        StringComparer.OrdinalIgnoreCase);
+        new(CanonicalServiceTypes, StringComparer.OrdinalIgnoreCase);
 
     public bool TryResolve(string? rawPath, out ArcGisResource resource)
     {
@@ -60,9 +63,6 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
                 "rest/services/",
                 StringComparison.OrdinalIgnoreCase))
         {
-            // ASP.NET's /arcgis/{**path} catch-all supplies only the value after
-            // /arcgis/. Canonicalize that trusted route-relative shape back to the
-            // ArcGIS REST root before applying the same resolver/security checks.
             normalizedDecoded = "arcgis/" + normalizedDecoded;
         }
 
@@ -82,8 +82,10 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
         if (typeIndex < 4)
             return false;
 
-        var serviceType = segments[typeIndex];
-        var serviceName = string.Join('/', segments[3..typeIndex]);
+        var serviceType = CanonicalServiceTypes.First(
+            x => x.Equals(segments[typeIndex], StringComparison.OrdinalIgnoreCase));
+        var serviceName = string.Join('/', segments[3..typeIndex])
+            .Normalize(NormalizationForm.FormC);
         if (string.IsNullOrWhiteSpace(serviceName))
             return false;
 
@@ -121,20 +123,26 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
             }
         }
 
-        var operation = cursor < segments.Length
-            ? segments[cursor]
-            : "metadata";
+        var operation = (cursor < segments.Length
+                ? segments[cursor]
+                : "metadata")
+            .ToLowerInvariant();
 
         var tail = cursor + 1 < segments.Length
             ? segments[(cursor + 1)..]
             : Array.Empty<string>();
 
+        var canonicalSegments = segments.ToArray();
+        canonicalSegments[typeIndex] = serviceType;
+        if (cursor < canonicalSegments.Length)
+            canonicalSegments[cursor] = operation;
+
         var canonical = "/" + string.Join(
             '/',
-            segments.Select(Uri.EscapeDataString));
+            canonicalSegments.Select(Uri.EscapeDataString));
 
         resource = new ArcGisResource(
-            string.Join('/', segments[3..(typeIndex + 1)]),
+            string.Join('/', canonicalSegments[3..(typeIndex + 1)]),
             serviceName,
             serviceType,
             layerId,
@@ -151,9 +159,7 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
     private static bool LooksLikeLayerId(string value) =>
         value.Length > 0 &&
         (value.All(char.IsDigit) ||
-         (value[0] == '-' &&
-          value.Length > 1 &&
-          value[1..].All(char.IsDigit)));
+         (value[0] == '-' && value.Length > 1 && value[1..].All(char.IsDigit)));
 
     private static bool ContainsUnsafePercentEncoding(string value)
     {
@@ -167,9 +173,7 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
                 !Uri.IsHexDigit(value[index + 2]))
                 return true;
 
-            var encoded = Convert.ToByte(
-                value.Substring(index + 1, 2),
-                16);
+            var encoded = Convert.ToByte(value.Substring(index + 1, 2), 16);
 
             if (encoded is
                     (byte)'/' or
