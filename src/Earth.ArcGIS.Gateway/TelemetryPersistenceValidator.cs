@@ -38,16 +38,31 @@ public static class TelemetryPersistenceValidator
             return;
         }
 
-        if (!Uri.TryCreate(
-                options.ClickHouseBaseUrl,
-                UriKind.Absolute,
-                out var uri) ||
+        var validUri = Uri.TryCreate(
+            options.ClickHouseBaseUrl,
+            UriKind.Absolute,
+            out var uri);
+        var validScheme = validUri && uri is not null &&
+            (production
+                ? string.Equals(
+                    uri.Scheme,
+                    Uri.UriSchemeHttps,
+                    StringComparison.OrdinalIgnoreCase)
+                : string.Equals(
+                      uri.Scheme,
+                      Uri.UriSchemeHttp,
+                      StringComparison.OrdinalIgnoreCase) ||
+                  string.Equals(
+                      uri.Scheme,
+                      Uri.UriSchemeHttps,
+                      StringComparison.OrdinalIgnoreCase));
+
+        if (!validUri ||
+            uri is null ||
+            !validScheme ||
             !string.IsNullOrEmpty(uri.UserInfo) ||
             !string.IsNullOrEmpty(uri.Query) ||
-            !string.IsNullOrEmpty(uri.Fragment) ||
-            (production
-                ? uri.Scheme != Uri.UriSchemeHttps
-                : uri.Scheme is not (Uri.UriSchemeHttp or Uri.UriSchemeHttps)))
+            !string.IsNullOrEmpty(uri.Fragment))
         {
             throw new InvalidOperationException(
                 production
