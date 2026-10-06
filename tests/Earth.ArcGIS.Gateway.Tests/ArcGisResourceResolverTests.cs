@@ -21,6 +21,20 @@ public sealed class ArcGisResourceResolverTests
     }
 
     [Fact]
+    public void CanonicalizesOperationAndServiceTypeCasing()
+    {
+        Assert.True(_resolver.TryResolve(
+            "arcgis/rest/services/Land/Parcels/featureserver/0/QuErY",
+            out var resource));
+
+        Assert.Equal("FeatureServer", resource.ServiceType);
+        Assert.Equal("query", resource.Operation);
+        Assert.Equal(
+            "/arcgis/rest/services/Land/Parcels/FeatureServer/0/query",
+            resource.CanonicalPath);
+    }
+
+    [Fact]
     public void ResolvesAspNetCatchAllRouteRelativePathToSameCanonicalResource()
     {
         Assert.True(_resolver.TryResolve(
@@ -39,7 +53,7 @@ public sealed class ArcGisResourceResolverTests
     [Theory]
     [InlineData("arcgis/rest/services/Land/Parcels/FeatureServer/0/attachments/12", "FeatureServer", 0, "attachments", "12")]
     [InlineData("arcgis/rest/services/Basemap/Base/VectorTileServer/tile/10/315/421.pbf", "VectorTileServer", null, "tile", "10|315|421.pbf")]
-    [InlineData("arcgis/rest/services/Imagery/Orthophoto/ImageServer/exportImage", "ImageServer", null, "exportImage", "")]
+    [InlineData("arcgis/rest/services/Imagery/Orthophoto/ImageServer/exportImage", "ImageServer", null, "exportimage", "")]
     [InlineData("arcgis/rest/services/Buildings/Main/SceneServer/layers/3/nodes/root", "SceneServer", 3, "nodes", "root")]
     public void ResolvesSupportedReadShapes(
         string path,
