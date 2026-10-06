@@ -11,7 +11,6 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
@@ -34,7 +33,7 @@ public sealed class HostedGatewaySecurityTests
             "/health/live",
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await AssertStatusAsync(HttpStatusCode.OK, response);
     }
 
     [Fact]
@@ -47,7 +46,7 @@ public sealed class HostedGatewaySecurityTests
             ResourcePath(),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        await AssertStatusAsync(HttpStatusCode.Unauthorized, response);
         Assert.Equal(0, factory.ArcGis.RequestCount);
     }
 
@@ -63,7 +62,7 @@ public sealed class HostedGatewaySecurityTests
             ResourcePath(),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await AssertStatusAsync(HttpStatusCode.OK, response);
         Assert.Equal(1, factory.ArcGis.RequestCount);
         Assert.Equal(1, factory.Access.Calls);
     }
@@ -80,7 +79,7 @@ public sealed class HostedGatewaySecurityTests
             ResourcePath(),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        await AssertStatusAsync(HttpStatusCode.Forbidden, response);
         Assert.Equal(0, factory.ArcGis.RequestCount);
     }
 
@@ -100,7 +99,7 @@ public sealed class HostedGatewaySecurityTests
             ResourcePath(),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        await AssertStatusAsync(HttpStatusCode.Unauthorized, response);
         Assert.Equal(0, factory.ArcGis.RequestCount);
     }
 
@@ -116,7 +115,7 @@ public sealed class HostedGatewaySecurityTests
             ResourcePath() + "&token=browser-secret",
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertStatusAsync(HttpStatusCode.BadRequest, response);
         Assert.Equal(0, factory.ArcGis.RequestCount);
         Assert.Equal(0, factory.Access.Calls);
     }
@@ -131,11 +130,24 @@ public sealed class HostedGatewaySecurityTests
             "/admin/api/overview",
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        await AssertStatusAsync(HttpStatusCode.Redirect, response);
         Assert.StartsWith(
             "/admin/login",
             response.Headers.Location?.OriginalString,
             StringComparison.Ordinal);
+    }
+
+    private static async Task AssertStatusAsync(
+        HttpStatusCode expected,
+        HttpResponseMessage response)
+    {
+        if (response.StatusCode == expected)
+            return;
+
+        var body = await response.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken);
+        Assert.Fail(
+            $"Expected HTTP {(int)expected} {expected}, got {(int)response.StatusCode} {response.StatusCode}. Body: {body}");
     }
 
     private static WebApplicationFactoryClientOptions NoRedirect() =>
@@ -223,9 +235,11 @@ public sealed class HostedGatewaySecurityTests
                 services.AddSingleton<IArcGisCredentialProvider>(
                     new StaticCredentialProvider());
 
-                services.RemoveAll<IHttpClientFactory>();
-                services.AddSingleton<IHttpClientFactory>(
-                    new StubHttpClientFactory(new HttpClient(ArcGis)));
+                // Preserve the framework IHttpClientFactory because authentication
+                // and other middleware depend on it. Override only the ArcGIS named
+                // client used by the gateway upstream path.
+                services.AddHttpClient("arcgis")
+                    .ConfigurePrimaryHttpMessageHandler(() => ArcGis);
             });
         }
     }
@@ -253,11 +267,6 @@ public sealed class HostedGatewaySecurityTests
         public void InvalidateToken()
         {
         }
-    }
-
-    private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory
-    {
-        public HttpClient CreateClient(string name) => client;
     }
 
     public sealed class RecordingArcGisHandler : HttpMessageHandler
