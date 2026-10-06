@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using StackExchange.Redis;
@@ -65,6 +66,15 @@ public interface IUserActivityRateLimiter
         CancellationToken cancellationToken);
 }
 
+internal static class UserActivityRateKeyNormalizer
+{
+    public static string Service(string value) =>
+        value.Normalize(NormalizationForm.FormC);
+
+    public static string Operation(string value) =>
+        value.ToLowerInvariant();
+}
+
 public sealed class InMemoryUserActivityRateLimiter : IUserActivityRateLimiter
 {
     private readonly UserCentricRateLimitOptions options;
@@ -96,7 +106,10 @@ public sealed class InMemoryUserActivityRateLimiter : IUserActivityRateLimiter
             state.Sustained.ResetIfExpired(now, options.SustainedCapacity, options.SustainedWindowSeconds);
             state.Daily.ResetIfExpired(now, options.DailyCapacity, options.DailyWindowSeconds);
 
-            var resourceKey = new ResourceKey(key.Service, key.LayerId, key.Operation);
+            var resourceKey = new ResourceKey(
+                UserActivityRateKeyNormalizer.Service(key.Service),
+                key.LayerId,
+                UserActivityRateKeyNormalizer.Operation(key.Operation));
             var resource = state.Resources.GetValueOrDefault(resourceKey);
             if (resource is null)
             {
@@ -406,7 +419,11 @@ return {1, math.floor(tokens), resource, 0, 0}
 
     private static string BuildResourcePrefix(UserActivityRateKey key)
     {
-        var raw = $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}\n{key.Service}\n{key.LayerId?.ToString() ?? "-"}\n{key.Operation}";
+        var service = UserActivityRateKeyNormalizer.Service(key.Service);
+        var operation = UserActivityRateKeyNormalizer.Operation(key.Operation);
+        var layer = key.LayerId?.ToString(CultureInfo.InvariantCulture) ?? "-";
+        var raw =
+            $"{key.EarthIdSub}\n{key.Tenant ?? "-"}\n{key.Application}\n{service}\n{layer}\n{operation}";
         return $"eiag:resource-rate:{Hash(raw)}";
     }
 
