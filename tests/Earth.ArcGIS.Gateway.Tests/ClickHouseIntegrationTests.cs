@@ -9,19 +9,9 @@ public sealed class ClickHouseIntegrationTests
     [Fact]
     public async Task TelemetryInsertAndDurableAuditQueryRoundTrip()
     {
-        using var http = new HttpClient
-        {
-            BaseAddress = new Uri("http://localhost:8123"),
-            Timeout = TimeSpan.FromSeconds(5)
-        };
+        using var http = CreateHttpClient();
         var factory = new StubFactory(http);
-        var options = Options.Create(new TelemetryPersistenceOptions
-        {
-            ClickHouseBaseUrl = "http://localhost:8123",
-            Database = "default",
-            Table = "gateway_telemetry",
-            AdminAuditTable = "gateway_admin_audit"
-        });
+        var options = CreateOptions();
         var correlation = "ci-" + Guid.NewGuid().ToString("N");
         var sink = new ClickHouseTelemetrySink(factory, options);
         var query = new ClickHouseAuditQueryStore(
@@ -79,18 +69,9 @@ public sealed class ClickHouseIntegrationTests
     [Fact]
     public async Task AdminAuditInsertAndQueryRoundTrip()
     {
-        using var http = new HttpClient
-        {
-            BaseAddress = new Uri("http://localhost:8123"),
-            Timeout = TimeSpan.FromSeconds(5)
-        };
+        using var http = CreateHttpClient();
         var factory = new StubFactory(http);
-        var options = Options.Create(new TelemetryPersistenceOptions
-        {
-            ClickHouseBaseUrl = "http://localhost:8123",
-            Database = "default",
-            AdminAuditTable = "gateway_admin_audit"
-        });
+        var options = CreateOptions();
         var store = new ClickHouseAdminAuditStore(
             factory,
             options,
@@ -120,6 +101,24 @@ public sealed class ClickHouseIntegrationTests
         Assert.Equal(expected.TargetSubject, actual.TargetSubject);
         Assert.Equal(expected.Action, actual.Action);
     }
+
+    private static HttpClient CreateHttpClient() =>
+        new()
+        {
+            BaseAddress = new Uri("http://localhost:8123"),
+            Timeout = TimeSpan.FromSeconds(5)
+        };
+
+    private static IOptions<TelemetryPersistenceOptions> CreateOptions() =>
+        Options.Create(new TelemetryPersistenceOptions
+        {
+            ClickHouseBaseUrl = "http://localhost:8123",
+            Database = "default",
+            Table = "gateway_telemetry",
+            AdminAuditTable = "gateway_admin_audit",
+            Username = Environment.GetEnvironmentVariable("CLICKHOUSE_USER") ?? "ci",
+            Password = Environment.GetEnvironmentVariable("CLICKHOUSE_PASSWORD") ?? "ci-password"
+        });
 
     private sealed class StubFactory(HttpClient client) : IHttpClientFactory
     {
