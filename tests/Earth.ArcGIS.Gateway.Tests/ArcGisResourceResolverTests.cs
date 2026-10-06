@@ -20,6 +20,22 @@ public sealed class ArcGisResourceResolverTests
         Assert.Empty(resource.OperationTail ?? []);
     }
 
+    [Fact]
+    public void ResolvesAspNetCatchAllRouteRelativePathToSameCanonicalResource()
+    {
+        Assert.True(_resolver.TryResolve(
+            "rest/services/Land/Parcels/FeatureServer/0/query",
+            out var resource));
+
+        Assert.Equal("Land/Parcels", resource.ServiceName);
+        Assert.Equal("FeatureServer", resource.ServiceType);
+        Assert.Equal(0, resource.LayerId);
+        Assert.Equal("query", resource.Operation);
+        Assert.Equal(
+            "/arcgis/rest/services/Land/Parcels/FeatureServer/0/query",
+            resource.CanonicalPath);
+    }
+
     [Theory]
     [InlineData("arcgis/rest/services/Land/Parcels/FeatureServer/0/attachments/12", "FeatureServer", 0, "attachments", "12")]
     [InlineData("arcgis/rest/services/Basemap/Base/VectorTileServer/tile/10/315/421.pbf", "VectorTileServer", null, "tile", "10|315|421.pbf")]
