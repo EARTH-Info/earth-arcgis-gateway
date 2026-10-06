@@ -55,7 +55,18 @@ public sealed class ArcGisResourceResolver : IArcGisResourceResolver
             decoded.Contains("//", StringComparison.Ordinal))
             return false;
 
-        var segments = decoded.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var normalizedDecoded = decoded.TrimStart('/');
+        if (normalizedDecoded.StartsWith(
+                "rest/services/",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // ASP.NET's /arcgis/{**path} catch-all supplies only the value after
+            // /arcgis/. Canonicalize that trusted route-relative shape back to the
+            // ArcGIS REST root before applying the same resolver/security checks.
+            normalizedDecoded = "arcgis/" + normalizedDecoded;
+        }
+
+        var segments = normalizedDecoded.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length < 5 ||
             !segments[0].Equals("arcgis", StringComparison.OrdinalIgnoreCase) ||
             !segments[1].Equals("rest", StringComparison.OrdinalIgnoreCase) ||
