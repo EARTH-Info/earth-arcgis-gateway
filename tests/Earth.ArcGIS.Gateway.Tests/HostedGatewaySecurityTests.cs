@@ -207,6 +207,8 @@ public sealed class HostedGatewaySecurityTests
                     ["Applications:Registrations:jtuwma:Audiences:0"] = Audience,
                     ["Applications:Registrations:jtuwma:ClientIds:0"] = "jtuwma-web",
                     ["Applications:Registrations:jtuwma:AccessApiAuthorizeUrl"] = "https://policy.test/authorize",
+                    ["Admin:OidcClientId"] = "gateway-admin-test-client",
+                    ["Admin:OidcClientSecret"] = "gateway-admin-test-secret",
                     ["Protection:SourceRateLimit:Enabled"] = "false"
                 };
                 configuration.AddInMemoryCollection(values);
