@@ -16,7 +16,9 @@ WORKDIR /app
 ENV ASPNETCORE_HTTP_PORTS=8080 \
     DOTNET_EnableDiagnostics=0
 
-RUN useradd --create-home --uid 10001 gateway
+RUN useradd --create-home --uid 10001 gateway \
+    && mkdir -p /app/data/telemetry-spool \
+    && chown -R gateway:gateway /app/data
 COPY --from=build --chown=gateway:gateway /app/publish ./
 
 USER gateway
