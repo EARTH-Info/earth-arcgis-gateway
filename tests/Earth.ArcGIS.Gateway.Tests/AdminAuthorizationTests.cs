@@ -6,38 +6,97 @@ namespace Earth.ArcGIS.Gateway.Tests;
 public sealed class AdminAuthorizationTests
 {
     [Fact]
-    public void ExplicitAdminSubjectIsAuthorized()
+    public void ExplicitAdminSubjectIsAdministrator()
     {
-        var principal = Principal(
-            new Claim("sub", "admin-sub"));
+        var principal = Principal(new Claim("sub", "admin-sub"));
+        var options = Options();
+        options.AllowedSubjects = ["admin-sub"];
 
-        var allowed = AdminAuthorization.IsAuthorized(
+        Assert.True(AdminAuthorization.IsAuthorized(
             principal,
-            new AdminOptions
-            {
-                AllowedSubjects = ["admin-sub"],
-                AllowedRoles = []
-            });
-
-        Assert.True(allowed);
+            options,
+            AdminAccessLevel.Administrator));
     }
 
     [Fact]
-    public void ConfiguredAdminRoleIsAuthorized()
+    public void ViewerCanReadButCannotOperateSecurityControls()
+    {
+        var principal = Principal(
+            new Claim("sub", "viewer-sub"),
+            new Claim("role", "gateway-viewer"));
+        var options = Options();
+
+        Assert.True(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.Viewer));
+        Assert.False(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.SecurityOperator));
+        Assert.False(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.Administrator));
+    }
+
+    [Fact]
+    public void SecurityOperatorInheritsViewerButNotAdministrator()
     {
         var principal = Principal(
             new Claim("sub", "operator-sub"),
-            new Claim("role", "gateway-admin"));
+            new Claim("role", "gateway-security-operator"));
+        var options = Options();
 
-        var allowed = AdminAuthorization.IsAuthorized(
+        Assert.True(AdminAuthorization.IsAuthorized(
             principal,
-            new AdminOptions
-            {
-                AllowedSubjects = [],
-                AllowedRoles = ["gateway-admin"]
-            });
+            options,
+            AdminAccessLevel.Viewer));
+        Assert.True(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.SecurityOperator));
+        Assert.False(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.Administrator));
+    }
 
-        Assert.True(allowed);
+    [Fact]
+    public void AdministratorInheritsAllLevels()
+    {
+        var principal = Principal(
+            new Claim("sub", "admin-role-sub"),
+            new Claim("roles", "gateway-admin"));
+        var options = Options();
+
+        Assert.True(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.Viewer));
+        Assert.True(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.SecurityOperator));
+        Assert.True(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.Administrator));
+    }
+
+    [Fact]
+    public void LegacyAllowedRoleRemainsAdministratorEquivalent()
+    {
+        var principal = Principal(
+            new Claim("sub", "legacy-sub"),
+            new Claim("role", "legacy-admin"));
+        var options = Options();
+        options.AllowedRoles = ["legacy-admin"];
+
+        Assert.True(AdminAuthorization.IsAuthorized(
+            principal,
+            options,
+            AdminAccessLevel.Administrator));
     }
 
     [Fact]
@@ -45,27 +104,29 @@ public sealed class AdminAuthorizationTests
     {
         var principal = Principal(
             new Claim("sub", "ordinary-user"),
-            new Claim("role", "viewer"));
+            new Claim("role", "ordinary-role"));
 
-        var allowed = AdminAuthorization.IsAuthorized(
+        Assert.False(AdminAuthorization.IsAuthorized(
             principal,
-            new AdminOptions
-            {
-                AllowedSubjects = ["admin-sub"],
-                AllowedRoles = ["gateway-admin"]
-            });
-
-        Assert.False(allowed);
+            Options(),
+            AdminAccessLevel.Viewer));
     }
 
     [Fact]
-    public void MissingStableSubjectIsRejectedEvenWithRole()
+    public void MissingStableSubjectFailsIdentityRequirement()
     {
-        var principal = Principal(
-            new Claim("role", "gateway-admin"));
-
+        var principal = Principal(new Claim("role", "gateway-admin"));
         Assert.False(EarthIdAuthentication.HasStableSubject(principal));
     }
+
+    private static AdminOptions Options() => new()
+    {
+        AllowedSubjects = [],
+        ViewerRoles = ["gateway-viewer"],
+        SecurityOperatorRoles = ["gateway-security-operator"],
+        AdministratorRoles = ["gateway-admin"],
+        AllowedRoles = []
+    };
 
     private static ClaimsPrincipal Principal(params Claim[] claims) =>
         new(new ClaimsIdentity(claims, "test"));
