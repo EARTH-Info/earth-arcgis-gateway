@@ -33,6 +33,21 @@ public sealed class RequestActivityClassifierTests
         Assert.Equal(2, activity.CostUnits);
     }
 
+    [Fact]
+    public void ConflictingReturnGeometryValuesUseConservativeGeometryCost()
+    {
+        var query = new QueryCollection(new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+        {
+            ["returnGeometry"] = new Microsoft.Extensions.Primitives.StringValues(["true", "false"]),
+            ["outFields"] = "OBJECTID"
+        });
+
+        var activity = classifier.Classify(Resource("query"), query);
+
+        Assert.True(activity.ReturnsGeometry);
+        Assert.Equal(3, activity.CostUnits);
+    }
+
     [Theory]
     [InlineData("returnCountOnly", "query_count", 1)]
     [InlineData("returnIdsOnly", "query_ids", 1)]
@@ -49,6 +64,23 @@ public sealed class RequestActivityClassifierTests
         Assert.Equal(expectedClass, activity.Class);
         Assert.Equal(expectedCost, activity.CostUnits);
         Assert.False(activity.IsHeavy);
+    }
+
+    [Theory]
+    [InlineData("returnCountOnly", "query_count_spatial")]
+    [InlineData("returnIdsOnly", "query_ids_spatial")]
+    [InlineData("returnExtentOnly", "query_extent_spatial")]
+    public void SpatialCheapModesPaySpatialSurcharge(
+        string parameter,
+        string expectedClass)
+    {
+        var activity = classifier.Classify(
+            Resource("query"),
+            Query((parameter, "true"), ("geometry", "116,5")));
+
+        Assert.True(activity.IsSpatial);
+        Assert.Equal(expectedClass, activity.Class);
+        Assert.Equal(3, activity.CostUnits);
     }
 
     [Fact]
