@@ -182,6 +182,7 @@ public sealed class ClickHouseAuditQueryStore(
 
         parameters.Add(new("database", cfg.Database));
         parameters.Add(new("query", sql));
+        parameters.Add(new("date_time_output_format", "iso"));
         parameters.Add(new("param_limit", query.Limit.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
         var queryString = string.Join(
