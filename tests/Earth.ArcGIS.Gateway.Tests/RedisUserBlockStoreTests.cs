@@ -27,6 +27,9 @@ public sealed class RedisUserBlockStoreTests
         Assert.NotNull(observed);
         Assert.Equal(block.EarthIdSub, observed.EarthIdSub);
         Assert.Equal("abuse", observed.Reason);
+        Assert.Contains(
+            await second.GetActiveAsync(TestContext.Current.CancellationToken),
+            x => x.EarthIdSub == subject);
 
         Assert.True(await second.UnblockAsync(
             subject,
@@ -35,6 +38,9 @@ public sealed class RedisUserBlockStoreTests
         Assert.Null(await first.GetActiveAsync(
             subject,
             TestContext.Current.CancellationToken));
+        Assert.DoesNotContain(
+            await first.GetActiveAsync(TestContext.Current.CancellationToken),
+            x => x.EarthIdSub == subject);
     }
 
     [Fact]
@@ -62,6 +68,9 @@ public sealed class RedisUserBlockStoreTests
         Assert.Null(await store.GetActiveAsync(
             subject,
             TestContext.Current.CancellationToken));
+        Assert.DoesNotContain(
+            await store.GetActiveAsync(TestContext.Current.CancellationToken),
+            x => x.EarthIdSub == subject);
     }
 
     private static Task<ConnectionMultiplexer> ConnectAsync() =>
