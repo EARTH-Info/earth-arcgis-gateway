@@ -38,17 +38,17 @@ public sealed class TelemetryQueue : ITelemetryQueue
 
     public bool TryWrite(TelemetryEvent item)
     {
+        if (!_channel.Writer.TryWrite(item))
+        {
+            Interlocked.Increment(ref _dropped);
+            return false;
+        }
+
+        Interlocked.Increment(ref _accepted);
         _recent.Enqueue(item);
         while (_recent.Count > RecentCapacity)
             _recent.TryDequeue(out _);
-
-        if (_channel.Writer.TryWrite(item))
-        {
-            Interlocked.Increment(ref _accepted);
-            return true;
-        }
-        Interlocked.Increment(ref _dropped);
-        return false;
+        return true;
     }
 
     public IAsyncEnumerable<TelemetryEvent> ReadAllAsync(CancellationToken cancellationToken) =>
