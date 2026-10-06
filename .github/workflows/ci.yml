@@ -28,11 +28,15 @@ jobs:
           --health-retries 10
       clickhouse:
         image: clickhouse/clickhouse-server:25.8
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-password
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
         ports:
           - 8123:8123
           - 9000:9000
         options: >-
-          --health-cmd "clickhouse-client --query 'SELECT 1'"
+          --health-cmd "clickhouse-client --user ci --password ci-password --query 'SELECT 1'"
           --health-interval 3s
           --health-timeout 3s
           --health-retries 20
@@ -54,14 +58,17 @@ jobs:
         run: |
           CLICKHOUSE_CONTAINER="$(docker ps --filter ancestor=clickhouse/clickhouse-server:25.8 --format '{{.ID}}' | head -1)"
           test -n "$CLICKHOUSE_CONTAINER"
-          docker exec -i "$CLICKHOUSE_CONTAINER" clickhouse-client --multiquery < deploy/clickhouse-schema.sql
-          TABLE_COUNT="$(docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --query "SELECT count() FROM system.tables WHERE database=currentDatabase() AND name IN ('gateway_telemetry','gateway_admin_audit')")"
+          docker exec -i "$CLICKHOUSE_CONTAINER" clickhouse-client --user ci --password ci-password --multiquery < deploy/clickhouse-schema.sql
+          TABLE_COUNT="$(docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --user ci --password ci-password --query "SELECT count() FROM system.tables WHERE database=currentDatabase() AND name IN ('gateway_telemetry','gateway_admin_audit')")"
           test "$TABLE_COUNT" = "2"
 
       - name: Build gateway
         run: dotnet build src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj --configuration Release --no-restore
 
       - name: Test
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-password
         run: dotnet test tests/Earth.ArcGIS.Gateway.Tests/Earth.ArcGIS.Gateway.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=test-results.trx"
 
       - name: Build production container
