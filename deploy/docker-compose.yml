@@ -1,0 +1,68 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      EarthId__Authority: ${EARTHID_AUTHORITY}
+      EarthId__Audience: ${EARTHID_AUDIENCE}
+      Gateway__ArcGisBaseUrl: ${ARCGIS_BASE_URL}
+      Gateway__CredentialProvider: ${ARCGIS_CREDENTIAL_PROVIDER:-federated-11.3}
+      Gateway__PortalTokenEndpoint: ${ARCGIS_PORTAL_TOKEN_ENDPOINT}
+      Gateway__FederatedServerUrl: ${ARCGIS_FEDERATED_SERVER_URL}
+      Gateway__Username: ${ARCGIS_USERNAME}
+      Gateway__Password: ${ARCGIS_PASSWORD}
+      Gateway__OAuthTokenEndpoint: ${ARCGIS_OAUTH_TOKEN_ENDPOINT}
+      Gateway__OAuthClientId: ${ARCGIS_OAUTH_CLIENT_ID}
+      Gateway__OAuthClientSecret: ${ARCGIS_OAUTH_CLIENT_SECRET}
+      Gateway__OAuthExchangeForFederatedServer: ${ARCGIS_OAUTH_EXCHANGE_FOR_FEDERATED_SERVER:-true}
+      Gateway__AllowedPathPrefixes__0: ${ARCGIS_ALLOWED_PATH_PREFIX}
+      Applications__Registrations__jtuwma__Audiences__0: ${JTUWMA_AUDIENCE}
+      Applications__Registrations__jtuwma__ClientIds__0: ${JTUWMA_CLIENT_ID}
+      Applications__Registrations__jtuwma__AccessApiAuthorizeUrl: ${JTUWMA_ACCESS_API_AUTHORIZE_URL}
+      Redis__ConnectionString: redis:6379,abortConnect=false
+      Telemetry__ClickHouseBaseUrl: ${CLICKHOUSE_BASE_URL:?CLICKHOUSE_BASE_URL is required in Production}
+      Telemetry__Database: ${CLICKHOUSE_DATABASE:-default}
+      Telemetry__Table: ${CLICKHOUSE_TABLE:-gateway_telemetry}
+      Telemetry__Username: ${CLICKHOUSE_USERNAME:-}
+      Telemetry__Password: ${CLICKHOUSE_PASSWORD:-}
+      Admin__OidcClientId: ${GATEWAY_ADMIN_OIDC_CLIENT_ID:?GATEWAY_ADMIN_OIDC_CLIENT_ID is required}
+      Admin__OidcClientSecret: ${GATEWAY_ADMIN_OIDC_CLIENT_SECRET:?GATEWAY_ADMIN_OIDC_CLIENT_SECRET is required}
+      Admin__AllowedSubjects__0: ${GATEWAY_ADMIN_SUBJECT}
+      Admin__ViewerRoles__0: ${GATEWAY_ADMIN_VIEWER_ROLE:-gateway-viewer}
+      Admin__SecurityOperatorRoles__0: ${GATEWAY_ADMIN_SECURITY_OPERATOR_ROLE:-gateway-security-operator}
+      Admin__AdministratorRoles__0: ${GATEWAY_ADMINISTRATOR_ROLE:-gateway-admin}
+      Protection__TrustedProxies__0: ${TRUSTED_PROXY_IP:-}
+    volumes:
+      - gateway-spool:/app/data/telemetry-spool
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  redis-data:
+  gateway-spool:

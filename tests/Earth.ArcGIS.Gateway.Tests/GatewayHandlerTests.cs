@@ -1,0 +1,607 @@
+using System.Net;
+using System.Security.Claims;
+using System.Text;
+using Earth.ArcGIS.Gateway;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+
+namespace Earth.ArcGIS.Gateway.Tests;
+
+public sealed class GatewayHandlerTests
+{
+    private const string Path =
+        "arcgis/rest/services/Land/Parcels/FeatureServer/0/query";
+
+    [Fact]
+    public async Task AccessDenyNeverCallsCredentialProviderOrArcGis()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(false, "layer_denied", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.Equal(1, rate.Calls);
+        Assert.Equal(1, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task OversizedPostIsRejectedBeforeRateAccessAndArcGis()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("POST");
+        context.Request.ContentLength = 2 * 1024 * 1024 + 1;
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Theory]
+    [InlineData("token=browser-token")]
+    [InlineData("TOKEN=browser-token")]
+    [InlineData("ToKeN=browser-token")]
+    public async Task QueryArcGisTokenIsRejectedBeforeGatewayDependencies(string query)
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+        context.Request.QueryString = new QueryString("?" + query);
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task FormArcGisTokenIsRejectedBeforeGatewayDependencies()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("POST", "f=json&TOKEN=browser-token&where=1%3D1");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task ClientEsriAuthorizationHeaderIsRejectedBeforeGatewayDependencies()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+        context.Request.Headers["X-Esri-Authorization"] = "Bearer browser-token";
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task AuthFailureRetriesOnceAndReplaysPostBodyExactly()
+    {
+        var upstream = new RecordingHandler(
+            Json("""{"error":{"code":498}}"""),
+            Json("""{"features":[]}"""));
+        var credentials = new FakeCredentialProvider("token-1", "token-2");
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var body = "where=1%3D1&outFields=*&f=json";
+        var context = CreateContext("POST", body);
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Equal(2, upstream.Requests.Count);
+        Assert.All(upstream.Requests, request => Assert.Equal(body, request.Body));
+        Assert.Equal("Bearer token-1", upstream.Requests[0].EsriAuthorization);
+        Assert.Equal("Bearer token-2", upstream.Requests[1].EsriAuthorization);
+        Assert.Equal(2, credentials.GetCalls);
+        Assert.Equal(1, credentials.InvalidateCalls);
+
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body);
+        Assert.Equal(
+            """{"features":[]}""",
+            await reader.ReadToEndAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task SecondAuthFailureIsReturnedWithoutRetryLoop()
+    {
+        var upstream = new RecordingHandler(
+            Json("""{"error":{"code":"498"}}"""),
+            Json("""{"error":{"code":499}}"""));
+        var credentials = new FakeCredentialProvider("token-1", "token-2");
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("POST", "f=json");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(2, upstream.Requests.Count);
+        Assert.Equal(2, credentials.GetCalls);
+        Assert.Equal(1, credentials.InvalidateCalls);
+    }
+
+    [Fact]
+    public async Task NonObjectJsonResponseIsForwardedWithoutAuthRetry()
+    {
+        var upstream = new RecordingHandler(Json("""[{"value":1}]"""));
+        var credentials = new FakeCredentialProvider("token-1");
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Single(upstream.Requests);
+        Assert.Equal(1, credentials.GetCalls);
+        Assert.Equal(0, credentials.InvalidateCalls);
+
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body);
+        Assert.Equal(
+            """[{"value":1}]""",
+            await reader.ReadToEndAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ActiveUserBlockRejectsBeforeAllGatewayDependencies()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var blocks = new UserBlockStore();
+        await blocks.BlockAsync(
+            "sub-1",
+            "abuse",
+            "admin-sub",
+            TimeSpan.FromMinutes(10),
+            TestContext.Current.CancellationToken);
+        var context = CreateContext("GET");
+
+        await HandleAsync(
+            context,
+            upstream,
+            credentials,
+            access,
+            rate,
+            userBlocks: blocks);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task SafeCacheHeadersAreForwardedButCookiesAreNot()
+    {
+        var response = Json("""{"features":[]}""");
+        response.Headers.ETag =
+            new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"");
+        response.Headers.TryAddWithoutValidation(
+            "Set-Cookie",
+            "session=upstream-secret");
+        response.Content.Headers.ContentRange =
+            new System.Net.Http.Headers.ContentRangeHeaderValue(0, 9, 100);
+
+        var upstream = new RecordingHandler(response);
+        var credentials = new FakeCredentialProvider("arcgis-secret-token");
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal("\"v1\"", context.Response.Headers.ETag.ToString());
+        Assert.Equal(
+            "bytes 0-9/100",
+            context.Response.Headers.ContentRange.ToString());
+        Assert.False(context.Response.Headers.ContainsKey("Set-Cookie"));
+        Assert.DoesNotContain(
+            "arcgis-secret-token",
+            context.Response.Headers.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CredentialProviderFailureReturnsControlled502()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider
+        {
+            Failure = new InvalidOperationException("Malformed ArcGIS token response.")
+        };
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status502BadGateway, context.Response.StatusCode);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task RateBackendFailureReturns503WithoutAccessOrArcGis()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter(
+            new UserRateDecision(
+                false,
+                0,
+                null,
+                1,
+                "rate_backend_unavailable",
+                "test"));
+        var context = CreateContext("GET");
+
+        await HandleAsync(context, upstream, credentials, access, rate);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        Assert.Equal(1, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task UserConcurrencyExhaustionReturns429BeforeArcGis()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(
+            context,
+            upstream,
+            credentials,
+            access,
+            rate,
+            concurrencyGate: new RejectingConcurrencyGate());
+
+        Assert.Equal(StatusCodes.Status429TooManyRequests, context.Response.StatusCode);
+        Assert.Equal(1, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task BlockStoreFailureReturns503BeforeOtherDependencies()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(
+            context,
+            upstream,
+            credentials,
+            access,
+            rate,
+            userBlocks: new ThrowingBlockStore());
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    [Fact]
+    public async Task PrefixComparisonRequiresPathBoundary()
+    {
+        var upstream = new RecordingHandler();
+        var credentials = new FakeCredentialProvider();
+        var access = new FakeAccessPolicyClient(
+            new AccessPolicyDecision(true, "allow", "v1"));
+        var rate = new FakeRateLimiter();
+        var context = CreateContext("GET");
+
+        await HandleAsync(
+            context,
+            upstream,
+            credentials,
+            access,
+            rate,
+            allowedPrefix: "/arcgis/rest/services/Land/Parcel");
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.Equal(0, rate.Calls);
+        Assert.Equal(0, access.Calls);
+        Assert.Equal(0, credentials.GetCalls);
+        Assert.Empty(upstream.Requests);
+    }
+
+    private static async Task HandleAsync(
+        DefaultHttpContext context,
+        RecordingHandler upstream,
+        FakeCredentialProvider credentials,
+        FakeAccessPolicyClient access,
+        FakeRateLimiter rate,
+        string allowedPrefix = "/arcgis/rest/services/Land/Parcels",
+        IUserBlockStore? userBlocks = null,
+        IUserConcurrencyGate? concurrencyGate = null)
+    {
+        var http = new HttpClient(upstream);
+        using var upstreamGate = new ArcGisUpstreamGate(64);
+
+        await GatewayHandler.HandleAsync(
+            context,
+            Path,
+            new StubHttpClientFactory(http),
+            credentials,
+            Options.Create(new GatewayOptions
+            {
+                ArcGisBaseUrl = "https://arcgis.test",
+                AllowedPathPrefixes = [allowedPrefix]
+            }),
+            Options.Create(new ProtectionOptions()),
+            new FakeApplicationResolver(),
+            new ArcGisResourceResolver(),
+            new ArcGisOperationPolicy(),
+            new RequestActivityClassifier(new GisCostOptions()),
+            rate,
+            concurrencyGate ?? new AllowingConcurrencyGate(),
+            upstreamGate,
+            userBlocks ?? new UserBlockStore(),
+            access,
+            new TelemetryQueue(),
+            NullLoggerFactory.Instance);
+    }
+
+    private static DefaultHttpContext CreateContext(
+        string method,
+        string? body = null)
+    {
+        var context = new DefaultHttpContext();
+        context.TraceIdentifier = "cid-1";
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "sub-1"),
+            new Claim("tenant_id", "tenant-1")
+        ], "test"));
+        context.Request.Method = method;
+        context.Response.Body = new MemoryStream();
+
+        if (body is not null)
+        {
+            var bytes = Encoding.UTF8.GetBytes(body);
+            context.Request.Body = new MemoryStream(bytes);
+            context.Request.ContentLength = bytes.Length;
+            context.Request.ContentType = "application/x-www-form-urlencoded";
+        }
+
+        return context;
+    }
+
+    private static HttpResponseMessage Json(string body) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
+
+    private sealed class FakeApplicationResolver : IApplicationIdentityResolver
+    {
+        public bool TryResolve(
+            ClaimsPrincipal principal,
+            out GatewayApplication application)
+        {
+            application = new GatewayApplication(
+                "jtuwma",
+                "https://policy.test/authorize");
+            return true;
+        }
+    }
+
+    private sealed class FakeRateLimiter(
+        UserRateDecision? decision = null) : IUserActivityRateLimiter
+    {
+        private readonly UserRateDecision result =
+            decision ?? new UserRateDecision(
+                true,
+                100,
+                100,
+                0,
+                "rate_allow",
+                "test");
+
+        public int Calls { get; private set; }
+
+        public ValueTask<UserRateDecision> ConsumeAsync(
+            UserActivityRateKey key,
+            RequestActivity activity,
+            CancellationToken cancellationToken)
+        {
+            Calls++;
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class AllowingConcurrencyGate : IUserConcurrencyGate
+    {
+        public ValueTask<IUserConcurrencyLease?> TryEnterAsync(
+            UserConcurrencyKey key,
+            bool heavy,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult<IUserConcurrencyLease?>(
+                new FakeLease(heavy ? "heavy" : "interactive"));
+    }
+
+    private sealed class RejectingConcurrencyGate : IUserConcurrencyGate
+    {
+        public ValueTask<IUserConcurrencyLease?> TryEnterAsync(
+            UserConcurrencyKey key,
+            bool heavy,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult<IUserConcurrencyLease?>(null);
+    }
+
+    private sealed class FakeLease(string concurrencyClass) : IUserConcurrencyLease
+    {
+        public string Class { get; } = concurrencyClass;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ThrowingBlockStore : IUserBlockStore
+    {
+        public ValueTask<UserBlock?> GetActiveAsync(
+            string earthIdSub,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Redis unavailable.");
+
+        public ValueTask<UserBlock> BlockAsync(
+            string earthIdSub,
+            string reason,
+            string adminSubject,
+            TimeSpan? duration,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+
+        public ValueTask<bool> UnblockAsync(
+            string earthIdSub,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+
+        public ValueTask<IReadOnlyList<UserBlock>> GetActiveAsync(
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+    }
+
+    private sealed class FakeAccessPolicyClient(AccessPolicyDecision decision)
+        : IAccessPolicyClient
+    {
+        public int Calls { get; private set; }
+
+        public Task<AccessPolicyDecision> AuthorizeAsync(
+            GatewayApplication application,
+            AccessPolicyRequest request,
+            CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(decision);
+        }
+    }
+
+    private sealed class FakeCredentialProvider(params string[] tokens)
+        : IArcGisCredentialProvider
+    {
+        private int tokenIndex;
+
+        public int GetCalls { get; private set; }
+        public int InvalidateCalls { get; private set; }
+        public Exception? Failure { get; init; }
+
+        public Task<string> GetTokenAsync(CancellationToken cancellationToken)
+        {
+            GetCalls++;
+            if (Failure is not null)
+                throw Failure;
+
+            var value = tokens.Length == 0
+                ? "token"
+                : tokens[Math.Min(tokenIndex++, tokens.Length - 1)];
+            return Task.FromResult(value);
+        }
+
+        public void InvalidateToken() => InvalidateCalls++;
+    }
+
+    private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => client;
+    }
+
+    private sealed class RecordingHandler(params HttpResponseMessage[] responses)
+        : HttpMessageHandler
+    {
+        private int responseIndex;
+        public List<RecordedRequest> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var body = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            var authorization = request.Headers.TryGetValues(
+                "X-Esri-Authorization",
+                out var values)
+                ? values.Single()
+                : null;
+
+            Requests.Add(new RecordedRequest(body, authorization));
+
+            if (responses.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "ArcGIS upstream should not have been called.");
+            }
+
+            var index = Math.Min(responseIndex++, responses.Length - 1);
+            return responses[index];
+        }
+    }
+
+    private sealed record RecordedRequest(
+        string? Body,
+        string? EsriAuthorization);
+}

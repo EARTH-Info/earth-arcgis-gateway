@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - feat/modern-dotnet-earthid-gateway
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.8
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-password
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+        ports:
+          - 8123:8123
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --user ci --password ci-password --query 'SELECT 1'"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore gateway
+        run: dotnet restore src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj
+
+      - name: Restore tests
+        run: dotnet restore tests/Earth.ArcGIS.Gateway.Tests/Earth.ArcGIS.Gateway.Tests.csproj
+
+      - name: Secret scan
+        run: |
+          docker run --rm \
+            -v "$PWD:/work:ro" \
+            aquasec/trivy:0.57.1 \
+            fs --scanners secret --exit-code 1 --no-progress /work
+
+      - name: Initialize ClickHouse schema
+        run: |
+          CLICKHOUSE_CONTAINER="$(docker ps --filter ancestor=clickhouse/clickhouse-server:25.8 --format '{{.ID}}' | head -1)"
+          test -n "$CLICKHOUSE_CONTAINER"
+          docker exec -i "$CLICKHOUSE_CONTAINER" clickhouse-client --user ci --password ci-password --multiquery < deploy/clickhouse-schema.sql
+          TABLE_COUNT="$(docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --user ci --password ci-password --query "SELECT count() FROM system.tables WHERE database=currentDatabase() AND name IN ('gateway_telemetry','gateway_admin_audit')")"
+          test "$TABLE_COUNT" = "2"
+
+      - name: Build gateway
+        run: dotnet build src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj --configuration Release --no-restore
+
+      - name: Test with coverage gate
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-password
+        run: >-
+          dotnet test tests/Earth.ArcGIS.Gateway.Tests/Earth.ArcGIS.Gateway.Tests.csproj
+          --configuration Release
+          --no-restore
+          --logger "trx;LogFileName=test-results.trx"
+          /p:CollectCoverage=true
+          /p:CoverletOutput=TestResults/coverage/
+          /p:CoverletOutputFormat=cobertura
+          /p:Threshold=60
+          /p:ThresholdType=line
+          /p:ThresholdStat=total
+
+      - name: Build production container
+        run: docker build --pull -t earth-arcgis-gateway:ci .
+
+      - name: Production named-volume non-root smoke
+        run: |
+          test "$(docker image inspect earth-arcgis-gateway:ci --format '{{.Config.User}}')" = "gateway"
+          docker volume create gateway-spool-ci
+          trap 'docker volume rm -f gateway-spool-ci >/dev/null 2>&1 || true' EXIT
+          docker run --rm \
+            --read-only \
+            --tmpfs /tmp \
+            -v gateway-spool-ci:/app/data/telemetry-spool \
+            --entrypoint sh \
+            earth-arcgis-gateway:ci \
+            -c 'test -w /app/data/telemetry-spool && touch /app/data/telemetry-spool/runtime-smoke && rm /app/data/telemetry-spool/runtime-smoke'
+
+      - name: Running application health smoke
+        run: |
+          docker run -d --name gateway-runtime-smoke \
+            -p 127.0.0.1:18080:8080 \
+            -e ASPNETCORE_ENVIRONMENT=Development \
+            -e EarthId__Authority=https://earthid.test \
+            -e EarthId__Audience=gateway-api \
+            -e Admin__OidcClientId=gateway-admin-runtime-smoke \
+            -e Admin__OidcClientSecret=runtime-smoke-only \
+            -e Gateway__ArcGisBaseUrl=https://arcgis.test \
+            -e Gateway__CredentialProvider=federated-11.3 \
+            -e Gateway__PortalTokenEndpoint=https://portal.test/sharing/rest/generateToken \
+            -e Gateway__FederatedServerUrl=https://arcgis.test/arcgis \
+            -e Gateway__Username=gateway-user \
+            -e Gateway__Password=test-only \
+            -e Gateway__AllowedPathPrefixes__0=/arcgis/rest/services/Land/Parcels \
+            -e Applications__Registrations__jtuwma__Audiences__0=gateway-api \
+            -e Applications__Registrations__jtuwma__ClientIds__0=jtuwma-web \
+            -e Applications__Registrations__jtuwma__AccessApiAuthorizeUrl=https://policy.test/authorize \
+            earth-arcgis-gateway:ci
+          trap 'docker rm -f gateway-runtime-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs gateway-runtime-smoke
+          exit 1
+
+      - name: Dependency vulnerability audit
+        run: dotnet list src/Earth.ArcGIS.Gateway/Earth.ArcGIS.Gateway.csproj package --vulnerable --include-transitive
+
+      - name: Container vulnerability scan
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.57.1 \
+            image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --no-progress earth-arcgis-gateway:ci
+
+      - name: Upload test and coverage results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: tests/Earth.ArcGIS.Gateway.Tests/TestResults/**
+          if-no-files-found: warn
