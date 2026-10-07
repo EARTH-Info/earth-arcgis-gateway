@@ -111,6 +111,8 @@ jobs:
             -e ASPNETCORE_ENVIRONMENT=Development \
             -e EarthId__Authority=https://earthid.test \
             -e EarthId__Audience=gateway-api \
+            -e Admin__OidcClientId=gateway-admin-runtime-smoke \
+            -e Admin__OidcClientSecret=runtime-smoke-only \
             -e Gateway__ArcGisBaseUrl=https://arcgis.test \
             -e Gateway__CredentialProvider=federated-11.3 \
             -e Gateway__PortalTokenEndpoint=https://portal.test/sharing/rest/generateToken \
