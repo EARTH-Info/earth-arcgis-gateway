@@ -25,9 +25,6 @@ services:
       Applications__Registrations__jtuwma__Audiences__0: ${JTUWMA_AUDIENCE}
       Applications__Registrations__jtuwma__ClientIds__0: ${JTUWMA_CLIENT_ID}
       Applications__Registrations__jtuwma__AccessApiAuthorizeUrl: ${JTUWMA_ACCESS_API_AUTHORIZE_URL}
-      Applications__Registrations__geoforest__Audiences__0: ${GEOFOREST_AUDIENCE}
-      Applications__Registrations__geoforest__ClientIds__0: ${GEOFOREST_CLIENT_ID}
-      Applications__Registrations__geoforest__AccessApiAuthorizeUrl: ${GEOFOREST_ACCESS_API_AUTHORIZE_URL}
       Redis__ConnectionString: redis:6379,abortConnect=false
       Telemetry__ClickHouseBaseUrl: ${CLICKHOUSE_BASE_URL:?CLICKHOUSE_BASE_URL is required in Production}
       Telemetry__Database: ${CLICKHOUSE_DATABASE:-default}
